@@ -1,5 +1,5 @@
 -- Zomboid Range Select (PZ Build 42, controller inventory UI only).
--- Original independent implementation: defer A until released, select when A + D-pad.
+-- Independent implementation: hold RT + D-pad to extend a range; leave vanilla A intact.
 require 'ISUI/ISInventoryPage'
 require 'ISUI/ISInventoryPane'
 require 'ISUI/ISInventoryPaneContextMenu'
@@ -24,10 +24,13 @@ local function getState(pane)
     return pane.zrsState
 end
 
-local function isHeld(playerNum)
+-- Triggers are analog axes in B42: released ~= -1; fully pulled ~= +1.
+-- Require a deliberate pull, independent of controller button mappings.
+local function isRtHeld(playerNum)
     local jd = JoypadState and JoypadState.players and JoypadState.players[playerNum + 1]
-    return jd and jd.id ~= nil and jd.id >= 0 and
-        JoypadButton and JoypadButton.A and JoypadButton.A:isDown(jd.id) or false
+    local rt = JoypadAxis1d and JoypadAxis1d.RightTrigger
+    if not jd or jd.id == nil or jd.id < 0 or not rt then return false end
+    return (rt:getValue(jd.id) or -1) > 0.25
 end
 
 local function isReady(page)
@@ -86,19 +89,14 @@ local function transferSelection(page, pane, state)
     return true
 end
 
--- A is deferred until release, so A+D-pad does not pop up the vanilla context menu.
--- X acts on all selected items; B clears the selection before vanilla expand/collapse.
+-- RT starts a range only when moving the D-pad. A retains vanilla behavior
+-- unless a completed selection exists, in which case A opens a menu for it.
 function ISInventoryPage:onJoypadDown(button)
     if not isReady(self) then return originalDown(self, button) end
     local pane = self.inventoryPane
     local state = getState(pane)
-    if button == Joypad.AButton then
-        if state.anchor == nil then
-            local index = cursor(pane)
-            if not index then return originalDown(self, button) end
-            Core.begin(state, index)
-        end
-        return
+    if button == Joypad.AButton and state.anchor == nil and Core.count(state) > 0 then
+        if showSelectedMenu(self, pane, state) then return end
     end
     if button == Joypad.XButton and state.anchor == nil and Core.count(state) > 0 then
         if transferSelection(self, pane, state) then return end
@@ -110,34 +108,43 @@ function ISInventoryPage:onJoypadDown(button)
     return originalDown(self, button)
 end
 
-local function afterNavigation(page, oldPane, oldIndex)
-    if not oldPane or not page.inventoryPane or page.inventoryPane ~= oldPane then return end
-    local state = getState(oldPane)
-    if state.anchor == nil or not isHeld(page.player) then return end
-    local newIndex = cursor(oldPane)
+local function beforeNavigation(page, pane, oldIndex)
+    if not oldIndex or not isReady(page) or not isRtHeld(page.player) then return nil end
+    local state = getState(pane)
+    if state.anchor == nil then
+        Core.begin(state, oldIndex)
+        print('[ZomboidRangeSelect] RT selection started at row ' .. oldIndex)
+    end
+    return state
+end
+
+local function afterNavigation(page, pane, oldIndex, state)
+    if not state or pane ~= page.inventoryPane or pane.inventory ~= pane.zrsInventory then return end
+    local newIndex = cursor(pane)
     if newIndex and newIndex ~= oldIndex then
-        Core.extend(state, oldPane.items, newIndex, inventoryRow)
+        Core.extend(state, pane.items, newIndex, inventoryRow)
     end
 end
 
 function ISInventoryPage:onJoypadDirUp(joypadData)
     local pane = self.inventoryPane
     local oldIndex = pane and cursor(pane)
+    local state = beforeNavigation(self, pane, oldIndex)
     local result = originalUp(self, joypadData)
-    afterNavigation(self, pane, oldIndex)
+    afterNavigation(self, pane, oldIndex, state)
     return result
 end
 
 function ISInventoryPage:onJoypadDirDown(joypadData)
     local pane = self.inventoryPane
     local oldIndex = pane and cursor(pane)
+    local state = beforeNavigation(self, pane, oldIndex)
     local result = originalDirDown(self, joypadData)
-    afterNavigation(self, pane, oldIndex)
+    afterNavigation(self, pane, oldIndex, state)
     return result
 end
 
--- Poll the A release once per UI frame. Vanilla UI doesn't supply an A-up callback.
--- A short tap retains its usual action, or opens the menu for an existing multi-selection.
+-- Vanilla UI supplies no RT-up callback. Finish pending range once RT is released.
 function ISInventoryPane:update()
     originalPaneUpdate(self)
     local state = self.zrsState
@@ -147,16 +154,8 @@ function ISInventoryPane:update()
         self.zrsState = nil
         return
     end
-    if state.anchor ~= nil and not isHeld(self.player) then
-        local didSelect = Core.release(state)
-        if not didSelect then
-            local page = self.inventoryPage
-            if page and isReady(page) then
-                if Core.count(state) == 0 or not showSelectedMenu(page, self, state) then
-                    originalDown(page, Joypad.AButton)
-                end
-            end
-        end
+    if state.anchor ~= nil and not isRtHeld(self.player) then
+        Core.release(state)
     end
     if self.inventory then Core.prune(state, self.inventory) end
 end
