@@ -26,19 +26,44 @@ end
 
 -- Triggers are analog axes in B42: released ~= -1; fully pulled ~= +1.
 -- Require a deliberate pull, independent of controller button mappings.
-local function isRtHeld(playerNum)
+local function getPadId(playerNum, eventData, rememberedId)
+    -- The D-pad callback is proof of the actual controller that sent input.
+    -- In B42 the JoypadState.players entry may not yet be populated for
+    -- keyboard/mouse players that just switched to a controller.
+    if eventData and type(eventData.id) == 'number' and eventData.id >= 0 then
+        return eventData.id
+    end
+    if rememberedId ~= nil and rememberedId >= 0 then return rememberedId end
     local jd = JoypadState and JoypadState.players and JoypadState.players[playerNum + 1]
-    local rt = JoypadAxis1d and JoypadAxis1d.RightTrigger
-    if not jd or jd.id == nil or jd.id < 0 or not rt then return false end
-    return (rt:getValue(jd.id) or -1) > 0.25
+    if jd and jd.id ~= nil and jd.id >= 0 then return jd.id end
+    local player = getSpecificPlayer(playerNum)
+    if player and player.getJoypadBind then
+        local bound = player:getJoypadBind()
+        if bound and bound >= 0 then return bound end
+    end
+    return nil
+end
+
+local function rtValue(playerNum, eventData, rememberedId)
+    local id = getPadId(playerNum, eventData, rememberedId)
+    local axis = JoypadAxis1d and JoypadAxis1d.RightTrigger
+    if not id or not axis then return nil, id end
+    return axis:getValue(id), id
+end
+
+local function isRtHeld(playerNum, eventData, rememberedId)
+    local value, id = rtValue(playerNum, eventData, rememberedId)
+    -- B42 represents a released trigger as -1 and a fully pulled trigger as +1.
+    return value ~= nil and value > 0.25, id, value
 end
 
 local function isReady(page)
     local pane = page and page.inventoryPane
-    if not pane or not page.joyfocus or not pane.doController or pane.mode ~= 'details' then
-        return false
-    end
-    if JoypadState.disableInvInteraction then return false end
+    if not pane or pane.mode ~= 'details' then return false end
+    -- This function is called from an actual ISInventoryPage joypad callback.
+    -- Requiring both joyfocus and doController is too strict during B42
+    -- transitions between mouse and controller focus.
+    if JoypadState and JoypadState.disableInvInteraction then return false end
     local player = getSpecificPlayer(page.player)
     if not player or player:isAsleep() then return false end
     local speed = UIManager.getSpeedControls()
@@ -108,13 +133,37 @@ function ISInventoryPage:onJoypadDown(button)
     return originalDown(self, button)
 end
 
-local function beforeNavigation(page, pane, oldIndex)
-    if not oldIndex or not isReady(page) or not isRtHeld(page.player) then return nil end
+-- Print one observation per controller state; this helps distinguish "no pad"
+-- from a wrong analog mapping without flooding console.txt on every key repeat.
+local loggedInput = {}
+local function logDpadOnce(page, controllerId, value, held)
+    local category = held and 'rt-held' or (value == nil and 'no-axis' or 'rt-up')
+    local key = tostring(page.player) .. ':' .. category
+    if loggedInput[key] then return end
+    loggedInput[key] = true
+    print('[ZomboidRangeSelect] D-pad: player=' .. tostring(page.player) ..
+        ' controller=' .. tostring(controllerId) .. ' RT=' .. tostring(value) ..
+        ' held=' .. tostring(held) .. ' focus=' .. tostring(page.joyfocus) ..
+        ' controllerUI=' .. tostring(page.inventoryPane.doController))
+end
+
+local function beforeNavigation(page, pane, oldIndex, joypadData)
+    if not oldIndex or not isReady(page) then return nil end
+    local existing = pane.zrsState
+    local remembered = existing and existing.zrsPadId
+    local held, controllerId, value = isRtHeld(page.player, joypadData, remembered)
+    logDpadOnce(page, controllerId, value, held)
+    if not held then
+        -- Release may occur between two D-pad events; don't grow the old range.
+        if existing and existing.anchor ~= nil then Core.release(existing) end
+        return nil
+    end
     local state = getState(pane)
     if state.anchor == nil then
         Core.begin(state, oldIndex)
         print('[ZomboidRangeSelect] RT selection started at row ' .. oldIndex)
     end
+    state.zrsPadId = controllerId
     return state
 end
 
@@ -129,7 +178,7 @@ end
 function ISInventoryPage:onJoypadDirUp(joypadData)
     local pane = self.inventoryPane
     local oldIndex = pane and cursor(pane)
-    local state = beforeNavigation(self, pane, oldIndex)
+    local state = beforeNavigation(self, pane, oldIndex, joypadData)
     local result = originalUp(self, joypadData)
     afterNavigation(self, pane, oldIndex, state)
     return result
@@ -138,7 +187,7 @@ end
 function ISInventoryPage:onJoypadDirDown(joypadData)
     local pane = self.inventoryPane
     local oldIndex = pane and cursor(pane)
-    local state = beforeNavigation(self, pane, oldIndex)
+    local state = beforeNavigation(self, pane, oldIndex, joypadData)
     local result = originalDirDown(self, joypadData)
     afterNavigation(self, pane, oldIndex, state)
     return result
@@ -154,8 +203,9 @@ function ISInventoryPane:update()
         self.zrsState = nil
         return
     end
-    if state.anchor ~= nil and not isRtHeld(self.player) then
+    if state.anchor ~= nil and not isRtHeld(self.player, nil, state.zrsPadId) then
         Core.release(state)
+        print('[ZomboidRangeSelect] RT released; selected items=' .. Core.count(state))
     end
     if self.inventory then Core.prune(state, self.inventory) end
 end
@@ -182,4 +232,21 @@ function ISInventoryPane:prerender()
     self:setStencilRect(0, 0, self.width - 1, self.height - 1)
 end
 
-print('[ZomboidRangeSelect] Build 42 controller selection hooks installed')
+-- Player 0 may initially be mouse-controlled even if a controller is available.
+-- Report the actual assignment after the save loads; never force a takeover.
+if Events and Events.OnGameStart then
+    Events.OnGameStart.Add(function()
+        local player = getSpecificPlayer(0)
+        if player and player.getJoypadBind then
+            local id = player:getJoypadBind()
+            if not id or id < 0 then
+                print('[ZomboidRangeSelect] Player 0 has no controller assigned at game start. '
+                    .. 'Bind/take over the player with your gamepad before testing RT+D-pad.')
+            else
+                print('[ZomboidRangeSelect] Player 0 controller id=' .. tostring(id))
+            end
+        end
+    end)
+end
+
+print('[ZomboidRangeSelect] Build 42 RT controller hooks installed (v0.1.2)')

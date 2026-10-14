@@ -7,9 +7,9 @@ local aDown, menuCount, transfers, vanillaX = 0, 0, 0, 0
 local rtValue = -1
 Joypad = {AButton=1,BButton=2,XButton=3,YButton=4}
 JoypadAxis1d = {RightTrigger={getValue=function() return rtValue end}}
-JoypadState = {players={[1]={id=0}},disableInvInteraction=false}
+JoypadState = {players={},disableInvInteraction=false}
 UIManager = {getSpeedControls=function() return nil end}
-local player = {isAsleep=function() return false end}
+local player = {isAsleep=function() return false end, getJoypadBind=function() return -1 end}
 getSpecificPlayer = function() return player end
 instanceof = function(obj, kind) return kind=='InventoryItem' and obj.isItem == true end
 ISInventoryPaneContextMenu = {
@@ -45,7 +45,7 @@ local pane={inventory=inv, items=objects, doController=true,mode='details',joyse
 function pane:getAbsoluteX() return 0 end
 function pane:getAbsoluteY() return 0 end
 function pane:getYScroll() return 0 end
-local page=setmetatable({joyfocus=true, inventoryPane=pane,player=0}, {__index=ISInventoryPage})
+local page=setmetatable({joyfocus=false, inventoryPane=pane,player=0}, {__index=ISInventoryPage})
 setmetatable(pane, {__index=ISInventoryPane})
 pane.inventoryPage=page
 assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/client/ZRS_Client.lua'))()
@@ -53,6 +53,8 @@ assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/client/ZRS_Client
 page:onJoypadDown(Joypad.AButton)
 assert(aDown==1)
 
+-- No controller assigned to the player, but D-pad callback includes a valid id.
+-- The mod should use the event id instead of requiring JoypadState.players.
 -- RT without D-pad must not start a selection.
 rtValue=1; pane:update()
 assert(pane.zrsState.anchor==nil)
@@ -66,8 +68,10 @@ page:onJoypadDirUp({id=0})
 rtValue=-1; pane:update()
 assert(pane.zrsState.selected[objects[1]])
 assert(pane.zrsState.selected[objects[2]])
+assert(pane.zrsState.zrsPadId==0)
 assert(not pane.zrsState.selected[objects[3]])
 
+assert(pane.zrsState.anchor == nil)
 -- Move freely from row 2 to 5, then RT + up selects disjoint [4,5].
 page:onJoypadDirDown({id=0})
 page:onJoypadDirDown({id=0})
@@ -99,4 +103,4 @@ rtValue=-1
 -- Vanilla A stays available afterwards.
 page:onJoypadDown(Joypad.AButton)
 assert(aDown==2)
-print('OK: A vanilla, RT axis threshold, ranges, shrink, disjoint unions, A menu, X transfer')
+print('OK: A vanilla, RT axis via callback without player binding, ranges, shrink, unions, A menu, X transfer')

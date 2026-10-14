@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-Prototype v0.1.1 (Project Zomboid Build 42), developed independently from the workshop mod Controller Multi-Select. No upstream code is included.
+Prototype v0.1.2 (Project Zomboid Build 42), developed independently from the workshop mod Controller Multi-Select. No upstream code is included.
 
 ## Gamepad
 
@@ -33,9 +33,26 @@ find Contents -name '*.lua' -exec luac -p {} \;
 
 The tests exercise **only the portable selection state**, not PZ's runtime/controller integration. In-game verification is needed before publishing.
 
+
+## Troubleshooting gamepad input
+
+If the mod loads but RT+D-pad does nothing, first make sure PZ is actually controlling your **character** with the gamepad (not only moving a Steam Input mouse pointer). In the in-game controller options verify the device, use the game's controller takeover/assignment, and navigate the inventory using the controller's D-pad.
+
+On macOS, after a test run:
+
+```sh
+grep -F '[ZomboidRangeSelect]' "$HOME/Zomboid/console.txt" | tail -30
+```
+
+- `no controller assigned at game start`: your character was mouse-controlled when the game began; switch to controller mode before testing. You may still assign it later in the session.
+- `D-pad ... RT=...`: inventory page is receiving D-pad events and reports the right-trigger axis value.
+- `RT selection started`: our range-selection hook ran.
+- `RT released; selected items=N`: selection was committed.
+- **No D-pad lines despite moving with D-pad:** the inventory page isn't receiving controller focus/events; check Steam Input and PZ controller activation. Lua cannot fix input that PZ doesn't route into this UI.
+
 ## Known risks / validation required
 
-1. RT is read as the B42 analog `JoypadAxis1d.RightTrigger` (>0.25 on its -1..1 scale); verify the analog mapping and UI focus with the actual controller.
+1. RT is read as the B42 analog `JoypadAxis1d.RightTrigger` (>0.25 on its -1..1 scale). The D-pad callback's controller ID is used even if the player gamepad association is not yet initialized.
 2. Input handling depends on `JoypadAxis1d.RightTrigger:getValue`, `ISInventoryPage`, and `ISInventoryPane` hooks. Confirm against installed B42 files.
 3. Stacked/collapsed inventory rows, switching bags, sorting while selecting and scrolling need in-game checks.
 4. Verify transfer safety for favorites, equipped/heavy items, multi-player clients and mixed item stacks; vanilla context-menu transfer helpers are used.
