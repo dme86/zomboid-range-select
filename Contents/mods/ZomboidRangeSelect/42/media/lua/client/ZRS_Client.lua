@@ -1,111 +1,191 @@
--- Zomboid Range Select (PZ Build 42, controller inventory UI only).
--- Independent implementation: hold RT + D-pad to extend a range; leave vanilla A intact.
+-- Zomboid Range Select v0.1.4 for Project Zomboid Build 42.
+-- Poll the game's own inventory cursor and RT axis; do not intercept D-pad events.
+-- This is intentionally independent of the B42 joypad focus callback pipeline.
 require 'ISUI/ISInventoryPage'
 require 'ISUI/ISInventoryPane'
 require 'ISUI/ISInventoryPaneContextMenu'
-
 local Core = require 'ZRS_Core'
 
-local originalDown = ISInventoryPage.onJoypadDown
-local originalUp = ISInventoryPage.onJoypadDirUp
-local originalDirDown = ISInventoryPage.onJoypadDirDown
-local originalPaneUpdate = ISInventoryPane.update
-local originalPanePrerender = ISInventoryPane.prerender
+local oldDown = ISInventoryPage.onJoypadDown
+local oldPaneUpdate = ISInventoryPane.update
+local oldPrerender = ISInventoryPane.prerender
 
-local function inventoryRow(row)
+local function isItem(row)
     return instanceof(row, 'InventoryItem')
 end
 
-local function getState(pane)
-    if not pane.zrsState or pane.zrsInventory ~= pane.inventory then
+local function stateFor(pane)
+    if pane.zrsInventory ~= pane.inventory or not pane.zrsState then
         pane.zrsInventory = pane.inventory
         pane.zrsState = Core.new()
     end
     return pane.zrsState
 end
 
--- Triggers are analog axes in B42: released ~= -1; fully pulled ~= +1.
--- Require a deliberate pull, independent of controller button mappings.
-local function getPadId(playerNum, eventData, rememberedId)
-    -- The D-pad callback is proof of the actual controller that sent input.
-    -- In B42 the JoypadState.players entry may not yet be populated for
-    -- keyboard/mouse players that just switched to a controller.
-    if eventData and type(eventData.id) == 'number' and eventData.id >= 0 then
-        return eventData.id
-    end
-    if rememberedId ~= nil and rememberedId >= 0 then return rememberedId end
+local function rowIndex(pane)
+    if not pane.items or #pane.items == 0 then return nil end
+    if pane.joyselection == nil then return nil end
+    return (pane.joyselection % #pane.items) + 1
+end
+
+local function controllerId(playerNum)
     local jd = JoypadState and JoypadState.players and JoypadState.players[playerNum + 1]
-    if jd and jd.id ~= nil and jd.id >= 0 then return jd.id end
+    if jd and type(jd.id) == 'number' and jd.id >= 0 then return jd.id end
     local player = getSpecificPlayer(playerNum)
     if player and player.getJoypadBind then
-        local bound = player:getJoypadBind()
-        if bound and bound >= 0 then return bound end
+        local id = player:getJoypadBind()
+        if type(id) == 'number' and id >= 0 then return id end
+    end
+    -- Some controller setups have a connected device but no player mapping
+    -- during initial inventory focus. Prefer real mappings over this fallback.
+    local controllers = JoypadState and JoypadState.controllers
+    if controllers then
+        for id = 0, 15 do
+            if controllers[id] and controllers[id].connected then return id end
+        end
     end
     return nil
 end
 
-local function rtValue(playerNum, eventData, rememberedId)
-    local id = getPadId(playerNum, eventData, rememberedId)
-    local axis = JoypadAxis1d and JoypadAxis1d.RightTrigger
-    if not id or not axis then return nil, id end
-    return axis:getValue(id), id
-end
-
-local function isRtHeld(playerNum, eventData, rememberedId)
-    local value, id = rtValue(playerNum, eventData, rememberedId)
-    -- B42 represents a released trigger as -1 and a fully pulled trigger as +1.
-    return value ~= nil and value > 0.25, id, value
+local function triggerValue(id)
+    local rt = JoypadAxis1d and JoypadAxis1d.RightTrigger
+    if id == nil or not rt then return nil end
+    local ok, value = pcall(function() return rt:getValue(id) end)
+    if ok and type(value) == 'number' then return value end
+    return nil
 end
 
 local function isReady(page)
     local pane = page and page.inventoryPane
-    if not pane or pane.mode ~= 'details' then return false end
-    -- This function is called from an actual ISInventoryPage joypad callback.
-    -- Requiring both joyfocus and doController is too strict during B42
-    -- transitions between mouse and controller focus.
+    if not pane or not pane.inventory or pane.mode ~= 'details' then return false end
     if JoypadState and JoypadState.disableInvInteraction then return false end
     local player = getSpecificPlayer(page.player)
     if not player or player:isAsleep() then return false end
-    local speed = UIManager.getSpeedControls()
-    if speed and speed:getCurrentGameSpeed() == 0 then return false end
+    if not (page.joyfocus or pane.doController) then return false end
+    -- Don't select while a menu or another UI element owns controller focus.
+    local jd = JoypadState and JoypadState.players and JoypadState.players[page.player + 1]
+    if jd and jd.focus and jd.focus ~= page then return false end
     return true
 end
 
-local function cursor(pane)
-    local n = #pane.items
-    if n < 1 then return nil end
-    -- Vanilla normalizes joyselection in renderdetails. Normalize here as well,
-    -- because gamepad D-pad callbacks can run before the next render.
-    pane.joyselection = (pane.joyselection or 0) % n
-    return pane.joyselection + 1
+local lastRuntimeStatus = {}
+local function runtimeNote(page, id, value)
+    local key = tostring(page.player) .. ':' .. tostring(id)
+    if lastRuntimeStatus[key] then return end
+    lastRuntimeStatus[key] = true
+    print('[ZomboidRangeSelect] inventory polling active: player=' ..
+        tostring(page.player) .. ' pad=' .. tostring(id) .. ' RT=' .. tostring(value))
 end
 
-local function availableItems(pane, state)
+local function pollPane(page)
+    if not isReady(page) then
+        local pane = page and page.inventoryPane
+        local state = pane and pane.zrsState
+        if state then
+            if state.anchor then Core.release(state) end
+            state.zrsHeld = false
+            state.zrsLastCursor = nil
+        end
+        return
+    end
+    local pane = page.inventoryPane
+    local cursor = rowIndex(pane)
+    if not cursor then return end
+    local state = stateFor(pane)
+    local id = controllerId(page.player)
+    local value = triggerValue(id)
+    runtimeNote(page, id, value)
+    if value == nil then
+        if not state.zrsNoAxisNoted then
+            print('[ZomboidRangeSelect] RT axis unavailable. ' ..
+                'Check gamepad binding in PZ (controller id=' .. tostring(id) .. ').')
+            state.zrsNoAxisNoted = true
+        end
+        if state.anchor then Core.release(state) end
+        state.zrsHeld = false
+        state.zrsLastCursor = cursor
+        return
+    end
+
+    -- Hysteresis avoids accidental release at the analog trigger threshold.
+    local held = value > (state.zrsHeld and 0.10 or 0.25)
+    if held and not state.zrsHeld then
+        -- Use the previous observed cursor, even if RT and D-pad changed between
+        -- two UI updates. No D-pad callback or button mapping is required.
+        Core.begin(state, state.zrsLastCursor or cursor)
+        print('[ZomboidRangeSelect] RT down; anchor=' .. tostring(state.anchor) ..
+            ' value=' .. tostring(value))
+    elseif not held and state.zrsHeld then
+        if state.anchor then Core.release(state) end
+        print('[ZomboidRangeSelect] RT up; selected=' .. Core.count(state))
+    end
+
+    if held and state.anchor and (state.zrsLastCursor ~= cursor or not state.dragging) then
+        local didExtend = Core.extend(state, pane.items, cursor, isItem)
+        if didExtend then
+            print('[ZomboidRangeSelect] selected=' .. Core.count(state) ..
+                ' cursor=' .. cursor)
+        end
+    end
+
+    state.zrsHeld = held
+    state.zrsLastCursor = cursor
     Core.prune(state, pane.inventory)
-    return Core.actionItems(state, pane.items, pane.inventory, inventoryRow)
 end
 
-local function showSelectedMenu(page, pane, state)
-    local items = availableItems(pane, state)
+-- Called from both the pane's UI update and PZ's game tick. Either entry
+-- point is sufficient; the state machine is idempotent when both run.
+function ISInventoryPane:update()
+    oldPaneUpdate(self)
+    if self.inventoryPage then pollPane(self.inventoryPage) end
+end
+
+local function pollActivePages()
+    for playerNum = 0, 3 do
+        if getSpecificPlayer(playerNum) then
+            local inv = getPlayerInventory(playerNum)
+            local loot = getPlayerLoot(playerNum)
+            if inv and inv.inventoryPane then pollPane(inv) end
+            if loot and loot ~= inv and loot.inventoryPane then pollPane(loot) end
+        end
+    end
+end
+
+if Events and Events.OnTick then
+    Events.OnTick.Add(pollActivePages)
+    print('[ZomboidRangeSelect] registered game-tick fallback')
+else
+    print('[ZomboidRangeSelect] OnTick unavailable; UI update polling only')
+end
+
+local function actionItems(pane, state)
+    Core.prune(state, pane.inventory)
+    return Core.actionItems(state, pane.items, pane.inventory, isItem)
+end
+
+local function menuForSelection(page, pane, state)
+    local items = actionItems(pane, state)
     if #items == 0 then return false end
     local player = getSpecificPlayer(page.player)
     if not player then return false end
-    local isInInventory = pane.inventory:isInCharacterInventory(player)
-    local x = pane:getAbsoluteX() + 64
-    local y = pane:getAbsoluteY() + 8 + ((cursor(pane) or 1) - 1) * pane.itemHgt + pane:getYScroll()
-    local menu = ISInventoryPaneContextMenu.createMenu(page.player, isInInventory, items, x, y)
-    if menu then
-        menu.origin = page
-        menu.mouseOver = 1
-        if menu.numOptions > 1 then setJoypadFocus(page.player, menu) end
-    end
+    local inInv = pane.inventory:isInCharacterInventory(player)
+    local y = pane:getAbsoluteY() + 8 + ((rowIndex(pane) or 1) - 1) *
+        pane.itemHgt + pane:getYScroll()
+    local menu = ISInventoryPaneContextMenu.createMenu(
+        page.player, inInv, items, pane:getAbsoluteX() + 64, y)
+    if not menu then return false end
+    menu.origin = page
+    menu.mouseOver = 1
+    if menu.numOptions > 1 then setJoypadFocus(page.player, menu) end
     return true
 end
 
 local function transferSelection(page, pane, state)
-    local items = availableItems(pane, state)
+    local items = actionItems(pane, state)
     if #items == 0 then return false end
-    if pane.inventory:isInCharacterInventory(getSpecificPlayer(page.player)) then
+    local player = getSpecificPlayer(page.player)
+    if not player then return false end
+    if pane.inventory:isInCharacterInventory(player) then
         ISInventoryPaneContextMenu.onPutItems(items, page.player)
     else
         ISInventoryPaneContextMenu.onGrabItems(items, page.player)
@@ -114,219 +194,45 @@ local function transferSelection(page, pane, state)
     return true
 end
 
--- RT starts a range only when moving the D-pad. A retains vanilla behavior
--- unless a completed selection exists, in which case A opens a menu for it.
+-- Leave A/X/B vanilla unless the player actually has marked items.
 function ISInventoryPage:onJoypadDown(button)
-    if not isReady(self) then return originalDown(self, button) end
-    local pane = self.inventoryPane
-    local state = getState(pane)
-    if button == Joypad.AButton and state.anchor == nil and Core.count(state) > 0 then
-        if showSelectedMenu(self, pane, state) then return end
-    end
-    if button == Joypad.XButton and state.anchor == nil and Core.count(state) > 0 then
-        if transferSelection(self, pane, state) then return end
-    end
-    if button == Joypad.BButton and (state.anchor ~= nil or Core.count(state) > 0) then
+    if not isReady(self) then return oldDown(self, button) end
+    pollPane(self)
+    local state = stateFor(self.inventoryPane)
+    if state.anchor then return oldDown(self, button) end
+    if Core.count(state) == 0 then return oldDown(self, button) end
+    if button == Joypad.AButton and menuForSelection(self, self.inventoryPane, state) then
+        return
+    elseif button == Joypad.XButton and transferSelection(self, self.inventoryPane, state) then
+        return
+    elseif button == Joypad.BButton then
         Core.clear(state)
         return
     end
-    return originalDown(self, button)
+    return oldDown(self, button)
 end
 
--- Print one observation per controller state; this helps distinguish "no pad"
--- from a wrong analog mapping without flooding console.txt on every key repeat.
-local loggedInput = {}
-local function logDpadOnce(page, controllerId, value, held)
-    local category = held and 'rt-held' or (value == nil and 'no-axis' or 'rt-up')
-    local key = tostring(page.player) .. ':' .. category
-    if loggedInput[key] then return end
-    loggedInput[key] = true
-    print('[ZomboidRangeSelect] D-pad: player=' .. tostring(page.player) ..
-        ' controller=' .. tostring(controllerId) .. ' RT=' .. tostring(value) ..
-        ' held=' .. tostring(held) .. ' focus=' .. tostring(page.joyfocus) ..
-        ' controllerUI=' .. tostring(page.inventoryPane.doController))
-end
-
-local function beforeNavigation(page, pane, oldIndex, joypadData)
-    if not oldIndex or not isReady(page) then return nil end
-    local existing = pane.zrsState
-    local remembered = existing and existing.zrsPadId
-    local held, controllerId, value = isRtHeld(page.player, joypadData, remembered)
-    logDpadOnce(page, controllerId, value, held)
-    if not held then
-        -- Release may occur between two D-pad events; don't grow the old range.
-        if existing and existing.anchor ~= nil then Core.release(existing) end
-        return nil
-    end
-    local state = getState(pane)
-    if state.anchor == nil then
-        Core.begin(state, oldIndex)
-        print('[ZomboidRangeSelect] RT selection started at row ' .. oldIndex)
-    end
-    state.zrsPadId = controllerId
-    return state
-end
-
-local function afterNavigation(page, pane, oldIndex, state)
-    if not state or pane ~= page.inventoryPane or pane.inventory ~= pane.zrsInventory then return end
-    local newIndex = cursor(pane)
-    if newIndex and newIndex ~= oldIndex then
-        Core.extend(state, pane.items, newIndex, inventoryRow)
-    end
-end
-
-function ISInventoryPage:onJoypadDirUp(joypadData)
-    local pane = self.inventoryPane
-    local oldIndex = pane and cursor(pane)
-    local state = beforeNavigation(self, pane, oldIndex, joypadData)
-    local result = originalUp(self, joypadData)
-    afterNavigation(self, pane, oldIndex, state)
-    return result
-end
-
-function ISInventoryPage:onJoypadDirDown(joypadData)
-    local pane = self.inventoryPane
-    local oldIndex = pane and cursor(pane)
-    local state = beforeNavigation(self, pane, oldIndex, joypadData)
-    local result = originalDirDown(self, joypadData)
-    afterNavigation(self, pane, oldIndex, state)
-    return result
-end
-
--- Vanilla UI supplies no RT-up callback. Finish pending range once RT is released.
-function ISInventoryPane:update()
-    originalPaneUpdate(self)
-    local state = self.zrsState
-    if not state then return end
-    if self.zrsInventory ~= self.inventory then
-        Core.clear(state)
-        self.zrsState = nil
-        return
-    end
-    if state.anchor ~= nil and not isRtHeld(self.player, nil, state.zrsPadId) then
-        Core.release(state)
-        print('[ZomboidRangeSelect] RT released; selected items=' .. Core.count(state))
-    end
-    if self.inventory then Core.prune(state, self.inventory) end
-end
-
--- A subtle highlight is rendered independently of pane.selected, which the base
--- controller UI clears each update. This also avoids interfering with mouse selection.
+-- The vanilla controller clears pane.selected every frame. Our selected items
+-- live in separate state, highlighted without modifying native inventory rows.
 function ISInventoryPane:prerender()
-    originalPanePrerender(self)
+    oldPrerender(self)
+    if not self.inventoryPage or not isReady(self.inventoryPage) then return end
     local state = self.zrsState
-    if not state or self.zrsInventory ~= self.inventory or self.mode ~= 'details' then return end
-    if Core.count(state) == 0 then return end
+    if not state or self.zrsInventory ~= self.inventory or Core.count(state) == 0 then return end
+    if not self.itemHgt or self.itemHgt <= 0 or not self.headerHgt then return end
     local height = self.height - self.headerHgt - 1
     if height <= 0 then return end
     self:setStencilRect(0, self.headerHgt, self.width - 1, height)
-    local minIndex = math.max(1, math.floor(-self:getYScroll() / self.itemHgt) - 1)
-    local maxIndex = math.min(#self.items, math.ceil((self.height - self:getYScroll()) / self.itemHgt) + 1)
-    for i = minIndex, maxIndex do
-        if Core.isRowFullySelected(state, self.items[i], inventoryRow) then
+    local scroll = self:getYScroll()
+    local first = math.max(1, math.floor(-scroll / self.itemHgt) - 1)
+    local last = math.min(#self.items, math.ceil((self.height - scroll) / self.itemHgt) + 1)
+    for i = first, last do
+        if Core.isRowFullySelected(state, self.items[i], isItem) then
             local y = self.headerHgt + (i - 1) * self.itemHgt
-            self:drawRect(1, y, self.width - 2, self.itemHgt, 0.28, 0.30, 0.56, 0.95)
+            self:drawRect(1, y, self.width - 2, self.itemHgt, 0.3, 0.28, 0.65, 1)
         end
     end
-    -- Restore the full pane clipping region for the vanilla render phase.
     self:setStencilRect(0, 0, self.width - 1, self.height - 1)
 end
 
--- Controller input monitor for Mac/Steam Input troubleshooting.
--- Runs outside inventory focus so we can tell a Steam Input keyboard/mouse
--- mapping from native joypad signals. Emit only on input/assignment changes.
-local monitorTicks = 0
-local lastStatus = nil
-local lastButtons = {}
-local lastAxes = {}
-
-local function safeAxisValue(axis, id)
-    if not axis then return nil end
-    local ok, value = pcall(function() return axis:getValue(id) end)
-    return ok and value or nil
-end
-
-local function safeButtonDown(button, id)
-    if not button then return false end
-    local ok, down = pcall(function() return button:isDown(id) end)
-    return ok and down == true
-end
-
-local function playerAssignment()
-    local player = getSpecificPlayer(0)
-    if not player or not player.getJoypadBind then return 'not spawned' end
-    return tostring(player:getJoypadBind())
-end
-
-local function monitorJoypads()
-    monitorTicks = monitorTicks + 1
-    if monitorTicks % 5 ~= 0 then return end
-
-    local assigned = playerAssignment()
-    local jd = JoypadState and JoypadState.players and JoypadState.players[1]
-    local mapped = jd and jd.id or nil
-    local connectedIds = {}
-    local controllers = JoypadState and JoypadState.controllers or {}
-    for id = 0, 15 do
-        local ctl = controllers[id]
-        if ctl and ctl.connected then
-            connectedIds[#connectedIds + 1] = id
-        end
-    end
-    local status = 'player0=' .. assigned .. ' JoypadState=' .. tostring(mapped) ..
-        ' connected=[' .. table.concat(connectedIds, ',') .. ']'
-    if lastStatus ~= status then
-        lastStatus = status
-        print('[ZomboidRangeSelect] INPUT STATUS ' .. status)
-        if #connectedIds == 0 then
-            print('[ZomboidRangeSelect] No native gamepad detected by PZ. '
-                .. 'Check Steam Input layout (Gamepad, not keyboard/mouse), connection and PZ controller options.')
-        end
-    end
-
-    for _, id in ipairs(connectedIds) do
-        local rt = safeAxisValue(JoypadAxis1d and JoypadAxis1d.RightTrigger, id)
-        local held = rt ~= nil and rt > 0.25
-        local prevHeld = lastAxes[id]
-        if prevHeld == nil or prevHeld ~= held then
-            lastAxes[id] = held
-            print('[ZomboidRangeSelect] INPUT RT controller=' .. id ..
-                ' value=' .. tostring(rt) .. ' held=' .. tostring(held))
-        end
-        local up = safeButtonDown(JoypadButton and JoypadButton.DPadUp, id)
-        local down = safeButtonDown(JoypadButton and JoypadButton.DPadDown, id)
-        local state = (up and 'UP' or '') .. (down and 'DOWN' or '')
-        if lastButtons[id] ~= state then
-            lastButtons[id] = state
-            if state ~= '' then
-                print('[ZomboidRangeSelect] INPUT D-PAD controller=' .. id ..
-                    ' direction=' .. state .. ' RT=' .. tostring(rt))
-            end
-        end
-    end
-end
-
-if Events and Events.OnTick then
-    Events.OnTick.Add(monitorJoypads)
-else
-    print('[ZomboidRangeSelect] INPUT MONITOR unavailable: Events.OnTick missing')
-end
-
--- Player 0 may initially be mouse-controlled even if a controller is available.
--- Report the actual assignment after the save loads; never force a takeover.
-if Events and Events.OnGameStart then
-    Events.OnGameStart.Add(function()
-        local player = getSpecificPlayer(0)
-        if player and player.getJoypadBind then
-            local id = player:getJoypadBind()
-            if not id or id < 0 then
-                print('[ZomboidRangeSelect] Player 0 has no controller assigned at game start. '
-                    .. 'Bind/take over the player with your gamepad before testing RT+D-pad.')
-            else
-                print('[ZomboidRangeSelect] Player 0 controller id=' .. tostring(id))
-            end
-        end
-    end)
-end
-
-print('[ZomboidRangeSelect] Build 42 RT controller hooks installed (v0.1.3)')
+print('[ZomboidRangeSelect] v0.1.4 polling selection hooks installed')
