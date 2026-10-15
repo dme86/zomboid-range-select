@@ -57,7 +57,7 @@ end
 -- On-screen diagnostics deliberately bypass the console/debug log.
 -- TextManager:DrawString is used directly from PZ's post-UI render event.
 -- This probe never changes controller input or the inventory selection.
-probe.overlayVersion = '0.1.9'
+probe.overlayVersion = '0.1.10'
 probe.renderedFrames = 0
 
 local function safeCall(fn, fallback)
@@ -121,6 +121,31 @@ local function describePane(pane, page, jd)
         ' selected=' .. selected .. ' gate=' .. gate
 end
 
+-- Read-only view of both inventory windows; do not touch UI focus.
+local function windowsStatus(player)
+    if not player then return 'Windows: no game player yet' end
+    if type(getPlayerInventory) ~= 'function' or type(getPlayerLoot) ~= 'function' then
+        return 'Windows: inventory UI functions unavailable'
+    end
+    local personal = safeCall(function() return getPlayerInventory(0) end)
+    local loot = safeCall(function() return getPlayerLoot(0) end)
+    local focus = nil
+    if type(getFocusForPlayer) == 'function' then
+        focus = safeCall(function() return getFocusForPlayer(0) end)
+    end
+    local location = 'OTHER'
+    if focus == nil then location = 'NONE'
+    elseif focus == personal and personal ~= nil then location = 'PERSONAL'
+    elseif focus == loot and loot ~= nil then location = 'LOOT' end
+    local function brief(page)
+        if not page then return 'missing' end
+        return 'collapsed=' .. tostring(page.isCollapsed) ..
+            ',joy=' .. tostring(page.joyfocus ~= nil and page.joyfocus ~= false)
+    end
+    return 'Windows focus=' .. location .. ' P[' .. brief(personal) ..
+        '] L[' .. brief(loot) .. ']'
+end
+
 local function eventStatus()
     local function yes(name)
         return probe.fired[name] and 'Y' or '-'
@@ -143,6 +168,7 @@ probe.drawHUD = function()
         'Player=' .. (player and 'YES' or 'NO') ..
             '  Controller=' .. tostring(id) .. '  RT=' .. tostring(rt),
         describePane(pane, page, jd),
+        windowsStatus(player),
         eventStatus()
     }
     -- Always draw in menu too. If it vanishes in-game, the UI listener is no

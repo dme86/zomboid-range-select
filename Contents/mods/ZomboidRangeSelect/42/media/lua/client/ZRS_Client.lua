@@ -1,4 +1,4 @@
--- Zomboid Range Select v0.1.9 for Project Zomboid Build 42.
+-- Zomboid Range Select v0.1.10 for Project Zomboid Build 42.
 -- Poll the game's own inventory cursor and RT axis; do not intercept D-pad events.
 -- This is intentionally independent of the B42 joypad focus callback pipeline.
 require 'ISUI/ISInventoryPage'
@@ -8,12 +8,9 @@ local Core = require 'ZRS_Core'
 
 -- Persistent callbacks survive beyond this Lua file's scope.
 ZRS = ZRS or {}
-ZRS.version = '0.1.9'
+ZRS.version = '0.1.10'
 
 local oldDown = ISInventoryPage.onJoypadDown
-local oldDirLeft = ISInventoryPage.onJoypadDirLeft
-local oldDirRight = ISInventoryPage.onJoypadDirRight
-local oldCollapseNow = ISInventoryPage.collapseNow
 local oldPaneUpdate = ISInventoryPane.update
 local oldPrerender = ISInventoryPane.prerender
 
@@ -273,80 +270,6 @@ function ISInventoryPage:onJoypadDown(button)
     return oldDown(self, button)
 end
 
--- Vanilla PZ already changes focus on D-pad left/right, but the unfocused
--- inventory page may still be collapsed by its mouse-away timer. Use
--- directional focus (left = character, right = loot) and keep both windows
--- expanded only while the controller is focused on either inventory page.
-local function inventoryPages(playerNum)
-    return getPlayerInventory(playerNum), getPlayerLoot(playerNum)
-end
-
-local function inventoryFocusActive(playerNum)
-    local inv, loot = inventoryPages(playerNum)
-    local focused = nil
-    if type(getFocusForPlayer) == 'function' then
-        focused = getFocusForPlayer(playerNum)
-    end
-    return (focused ~= nil and (focused == inv or focused == loot)) or
-        (inv and inv.joyfocus ~= nil and inv.joyfocus ~= false) or
-        (loot and loot.joyfocus ~= nil and loot.joyfocus ~= false)
-end
-
-local function expandInventory(page)
-    if not page then return end
-    if page.setVisible then page:setVisible(true) end
-    page.isCollapsed = false
-    if page.clearMaxDrawHeight then page:clearMaxDrawHeight() end
-    page.collapseCounter = 0
-end
-
--- Do not force pinning. Only suppress auto-collapse while an inventory page
--- actually owns controller focus; vanilla mouse behavior remains elsewhere.
-function ISInventoryPage:collapseNow(...)
-    local inv, loot = inventoryPages(self.player)
-    if (self == inv or self == loot) and inventoryFocusActive(self.player) then
-        self.collapseCounter = 0
-        return
-    end
-    return oldCollapseNow(self, ...)
-end
-
-local function navigatePane(source, direction, ...)
-    if not isReady(source) then return false end
-    local inv, loot = inventoryPages(source.player)
-    if not inv or not loot then return false end
-    if source ~= inv and source ~= loot then return false end
-
-    local target = direction == 'left' and inv or loot
-    if source ~= target then
-        -- Commit an in-progress range before changing the active container.
-        local state = source.inventoryPane and source.inventoryPane.zrsState
-        if state and state.anchor then Core.release(state) end
-        expandInventory(inv)
-        expandInventory(loot)
-        setJoypadFocus(source.player, target)
-        expandInventory(inv)
-        expandInventory(loot)
-        local pane = target.inventoryPane
-        if pane and pane.items and #pane.items > 0 and target.ensureVisible then
-            local index = ((pane.joyselection or 0) % #pane.items) + 1
-            target:ensureVisible(index)
-        end
-        print('[ZomboidRangeSelect] switched focus to ' .. direction)
-    end
-    return true
-end
-
-function ISInventoryPage:onJoypadDirLeft(...)
-    if navigatePane(self, 'left', ...) then return end
-    if oldDirLeft then return oldDirLeft(self, ...) end
-end
-
-function ISInventoryPage:onJoypadDirRight(...)
-    if navigatePane(self, 'right', ...) then return end
-    if oldDirRight then return oldDirRight(self, ...) end
-end
-
 -- The vanilla controller clears pane.selected every frame. Our selected items
 -- live in separate state, highlighted without modifying native inventory rows.
 function ISInventoryPane:prerender()
@@ -375,9 +298,6 @@ end
 ZRS.paneUpdateHook = ISInventoryPane.update
 ZRS.paneRenderHook = ISInventoryPane.prerender
 ZRS.pageButtonHook = ISInventoryPage.onJoypadDown
-ZRS.pageLeftHook = ISInventoryPage.onJoypadDirLeft
-ZRS.pageRightHook = ISInventoryPage.onJoypadDirRight
-ZRS.pageCollapseHook = ISInventoryPage.collapseNow
 
 function ZRS.ensureHooks(source)
     if not ISInventoryPane or not ISInventoryPage then return end
@@ -395,21 +315,6 @@ function ZRS.ensureHooks(source)
         oldDown = ISInventoryPage.onJoypadDown
         ISInventoryPage.onJoypadDown = ZRS.pageButtonHook
         print('[ZomboidRangeSelect] reattached page controller after ' .. source)
-    end
-    if ISInventoryPage.onJoypadDirLeft ~= ZRS.pageLeftHook then
-        oldDirLeft = ISInventoryPage.onJoypadDirLeft
-        ISInventoryPage.onJoypadDirLeft = ZRS.pageLeftHook
-        print('[ZomboidRangeSelect] reattached left navigation after ' .. source)
-    end
-    if ISInventoryPage.onJoypadDirRight ~= ZRS.pageRightHook then
-        oldDirRight = ISInventoryPage.onJoypadDirRight
-        ISInventoryPage.onJoypadDirRight = ZRS.pageRightHook
-        print('[ZomboidRangeSelect] reattached right navigation after ' .. source)
-    end
-    if ISInventoryPage.collapseNow ~= ZRS.pageCollapseHook then
-        oldCollapseNow = ISInventoryPage.collapseNow
-        ISInventoryPage.collapseNow = ZRS.pageCollapseHook
-        print('[ZomboidRangeSelect] reattached auto-collapse guard after ' .. source)
     end
 end
 
@@ -452,4 +357,4 @@ registerEvent('OnGameStart', ZRS.onGameStart)
 registerEvent('OnCreatePlayer', ZRS.onCreatePlayer)
 registerEvent('OnPlayerUpdate', ZRS.onPlayerUpdate)
 registerEvent('OnTick', ZRS.onTick)
-print('[ZomboidRangeSelect] v0.1.9 inventory pane navigation hooks installed')
+print('[ZomboidRangeSelect] v0.1.10 vanilla navigation and RT selection hooks installed')

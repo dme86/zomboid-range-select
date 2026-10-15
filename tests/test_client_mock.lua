@@ -34,36 +34,12 @@ ISInventoryPaneContextMenu = {
     onGrabItems=function(items) transfers=transfers+1; assert(#items==4) end,
     createMenu=function(_,_,items) menus=menus+1; assert(#items==4); return {numOptions=2} end
 }
--- Test actual focus changes, but don't replace focus with a context menu mock.
-local focusChanges = 0
-setJoypadFocus = function(_, target)
-    if not target or not target.inventoryPane then return end
-    local oldFocus = JoypadState.players[1] and JoypadState.players[1].focus
-    if oldFocus and oldFocus.inventoryPane then
-        oldFocus.joyfocus = false
-        oldFocus.inventoryPane.doController = false
-    end
-    if not JoypadState.players[1] then JoypadState.players[1]={id=2} end
-    JoypadState.players[1].focus = target
-    target.joyfocus = true
-    target.inventoryPane.doController = true
-    focusChanges = focusChanges + 1
-end
-getFocusForPlayer = function() return JoypadState.players[1] and JoypadState.players[1].focus end
+setJoypadFocus = function() end
 ISInventoryPane = {update=function() end, prerender=function() end}
-local originalLeft, originalRight, originalCollapses = 0, 0, 0
-ISInventoryPage = {
-    onJoypadDown=function(_,btn)
-        if btn==Joypad.AButton then vanillaA=vanillaA+1 end
-        if btn==Joypad.XButton then vanillaX=vanillaX+1 end
-    end,
-    onJoypadDirLeft=function() originalLeft=originalLeft+1 end,
-    onJoypadDirRight=function() originalRight=originalRight+1 end,
-    collapseNow=function(self)
-        originalCollapses=originalCollapses+1
-        self.isCollapsed=true
-    end
-}
+ISInventoryPage = {onJoypadDown=function(_,btn)
+    if btn==Joypad.AButton then vanillaA=vanillaA+1 end
+    if btn==Joypad.XButton then vanillaX=vanillaX+1 end
+end}
 local pane = setmetatable({
     player=0,inventory=inv,mode='details',items=objects,joyselection=0,
     doController=true,itemHgt=20,headerHgt=18,height=250,width=250
@@ -73,23 +49,8 @@ function pane:getAbsoluteY() return 0 end
 function pane:getYScroll() return 0 end
 local page = setmetatable({player=0,joyfocus=true,inventoryPane=pane},{__index=ISInventoryPage})
 pane.inventoryPage=page
-local lootInv = {isInCharacterInventory=function() return false end}
-local lootPane = setmetatable({
-    player=0, inventory=lootInv,mode='details',items={},joyselection=0,
-    doController=false,itemHgt=20,headerHgt=18,height=250,width=250
-}, {__index=ISInventoryPane})
-local lootPage = setmetatable({
-    player=0,joyfocus=false,inventoryPane=lootPane,isCollapsed=true,
-    collapseCounter=200
-}, {__index=ISInventoryPage})
-lootPane.inventoryPage=lootPage
-for _, p in ipairs({page,lootPage}) do
-    p.setVisible=function(self,yes) self.visible=yes end
-    p.clearMaxDrawHeight=function(self) self.maxDrawHeightCleared=true end
-    p.ensureVisible=function(self,index) self.lastVisibleIndex=index end
-end
 getPlayerInventory=function(n) if n==0 then return page end end
-getPlayerLoot=function(n) if n==0 then return lootPage end end
+getPlayerLoot=function() return nil end
 assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/client/ZRS_Client.lua'))()
 assert(type(handlers.OnTick)=='function')
 assert(type(handlers.OnGameStart)=='function')
@@ -158,36 +119,4 @@ pane.joyselection=4;tick()
 assert(state.selected[objects[5]])
 rtValue=-1;tick()
 
--- Directional D-pad switches focus, not window open/close.
-page.isCollapsed=true
-page:onJoypadDirRight()
-assert(focusChanges==1 and lootPage.joyfocus and not page.joyfocus)
-assert(not page.isCollapsed and not lootPage.isCollapsed)
-assert(page.visible and lootPage.visible)
-assert(page.maxDrawHeightCleared and lootPage.maxDrawHeightCleared)
-assert(page.collapseCounter==0 and lootPage.collapseCounter==0)
-assert(originalLeft==0 and originalRight==0)
-lootPage:onJoypadDirRight() -- already on right; must not toggle
-assert(focusChanges==1)
-lootPage:onJoypadDirLeft()
-assert(focusChanges==2 and page.joyfocus and not lootPage.joyfocus)
-page:onJoypadDirLeft() -- already on left; must not toggle
-assert(focusChanges==2)
--- Prevent mouse-away auto-collapse while controller focus is on inventory.
-page:collapseNow()
-lootPage:collapseNow()
-assert(not page.isCollapsed and not lootPage.isCollapsed)
-assert(originalCollapses==0)
--- Outside inventory focus, vanilla collapse behavior remains.
-page.joyfocus=false
-lootPage.joyfocus=false
-page.inventoryPane.doController=false
-lootPage.inventoryPane.doController=false
-JoypadState.players[1].focus=nil
-lootPage:collapseNow()
-assert(lootPage.isCollapsed and originalCollapses==1)
--- Later UI reinitialization must restore the directional hook.
-ISInventoryPage.onJoypadDirLeft=function() originalLeft=originalLeft+1 end
-ZRS.ensureHooks('unit-test')
-assert(ISInventoryPage.onJoypadDirLeft==ZRS.pageLeftHook)
-print('OK: persistent lifecycle handlers, RT selection, directional pane navigation, collapse guard, fallback')
+print('OK: persistent lifecycle handlers, late UI rehook, RT polling, additive ranges, A/X and controller fallback')
