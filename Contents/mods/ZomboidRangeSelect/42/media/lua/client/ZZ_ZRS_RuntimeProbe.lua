@@ -57,7 +57,7 @@ end
 -- On-screen diagnostics deliberately bypass the console/debug log.
 -- TextManager:DrawString is used directly from PZ's post-UI render event.
 -- This probe never changes controller input or the inventory selection.
-probe.overlayVersion = '0.1.10'
+probe.overlayVersion = '0.1.11'
 probe.renderedFrames = 0
 
 local function safeCall(fn, fallback)
@@ -169,6 +169,9 @@ probe.drawHUD = function()
             '  Controller=' .. tostring(id) .. '  RT=' .. tostring(rt),
         describePane(pane, page, jd),
         windowsStatus(player),
+        'Menu: ' .. tostring(ZRS and ZRS.lastMenuCount or '-') ..
+            ' side=' .. tostring(ZRS and ZRS.lastMenuSide or '-') ..
+            ' result=' .. tostring(ZRS and ZRS.lastMenuStatus or '-'),
         eventStatus()
     }
     -- Always draw in menu too. If it vanishes in-game, the UI listener is no

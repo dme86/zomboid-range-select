@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.10 read-only inventory diagnostics** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.11 controller menu and navigation fix** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -132,3 +132,11 @@ Note: the HUD drawing API is exercised in Lua mocks, but not yet in real PZ 42.2
 Version 0.1.9 briefly introduced an intrusive directional-navigation override and a global inventory auto-collapse guard, based on an unverified hypothesis that PZ was collapsing the loot window normally. That change failed CI and has been **fully reverted**. The vanilla `ISInventoryPage:onJoypadDirLeft`/`onJoypadDirRight` and `collapseNow` methods are not hooked or replaced by this version. The RT multi-selection code is otherwise unchanged from the last known green build (v0.1.8).
 
 The yellow HUD now shows a short **read-only** `Windows` line: `focus=PERSONAL/LOOT/NONE/OTHER`, plus each panel's `collapsed` and `joyfocus` values. These measurements distinguish a focus switch from an actual collapse and help isolate the behavior introduced in the presence of the mod. No UI behavior is modified by the probe. Test by pressing D-pad left/right once in each pane and capturing the HUD before/after.
+
+## v0.1.11: A menu and directional D-pad
+
+PZ 42's native A button invokes `ISInventoryPane:doContextOnJoypadSelected`. The mod now handles an existing multi-selection **at that entry point**, passing all selected actual items to `ISInventoryPaneContextMenu.createMenu`. The HUD includes a last-menu count, source pane and result to distinguish actual multi-item actions from just visual highlighting. A without an existing selection is vanilla. Selection is per pane: selecting in personal inventory and then pressing A on loot does not combine unrelated containers.
+
+In inventory focus only, D-pad **left means personal** and **right means loot**; pressing the direction of the current pane is a no-op rather than toggling. Both windows are re-expanded while joypad focus is on inventory; mouse auto-collapse stays vanilla outside inventory focus. This is a focused compatibility override, not a rewrite of controller movement.
+
+Test in a loaded save with 2+ selected items in **one pane**, release RT and press A in that same pane. The HUD should say `Menu: 2` (or more) and the menu should offer relevant multi-item options. Then press D-pad left/right and check the windows remain expanded. Automated mocks verify routing; actual PZ 42.21 remains the acceptance test.

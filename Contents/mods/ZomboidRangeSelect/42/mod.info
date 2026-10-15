@@ -1,5 +1,5 @@
 name=Zomboid Range Select
 id=ZomboidRangeSelect
 author=dme86
-modversion=0.1.10
+modversion=0.1.11
 description=Hold RT and move D-pad to add multiple item ranges in inventory/loot. Works with polled cursor changes in B42.
