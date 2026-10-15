@@ -15,6 +15,8 @@ Events = {
 }
 local rtValue = -1
 local vanillaA, vanillaX, menus, transfers = 0, 0, 0, 0
+local lastMenu = nil
+local bulkTransferred = 0
 local focusSwitches=0
 Joypad = {AButton=1,BButton=2,XButton=3,YButton=4}
 JoypadState = {players={[1]={id=2}}, controllers={[2]={connected=true}}}
@@ -31,7 +33,10 @@ for i=1,6 do
     objects[i]=o
 end
 ISInventoryPaneContextMenu = {
-    onPutItems=function() error('unexpected put') end,
+    onPutItems=function(items)
+        bulkTransferred=bulkTransferred+1
+        assert(#items==4)
+    end,
     onGrabItems=function(items) transfers=transfers+1; assert(#items==4) end,
     createMenu=function(_,_,items)
         menus=menus+1
@@ -39,7 +44,13 @@ ISInventoryPaneContextMenu = {
         for _, index in ipairs({1,2,4,5}) do
             assert(items[index == 1 and 1 or index == 2 and 2 or index == 4 and 3 or 4] == objects[index])
         end
-        return {numOptions=2}
+        local menu = {numOptions=2}
+        function menu:addOptionOnTop(label, target, callback, playerNum)
+            self.numOptions = self.numOptions + 1
+            self.bulk={label=label,target=target,callback=callback,playerNum=playerNum}
+        end
+        lastMenu=menu
+        return menu
     end
 }
 ISInventoryPane = {
@@ -48,6 +59,7 @@ ISInventoryPane = {
 }
 ISInventoryPage = {
     update=function() end,
+    collapseNow=function(self) self.isCollapsed=true end,
     onJoypadDown=function(self,btn)
         if btn==Joypad.AButton then self.inventoryPane:doContextOnJoypadSelected() end
         if btn==Joypad.XButton then vanillaX=vanillaX+1 end
@@ -146,9 +158,13 @@ assert(require('ZRS_Core').count(state)==4)
 page:onJoypadDown(Joypad.AButton)
 assert(menus==1 and vanillaA==1)
 assert(ZRS.lastMenuCount == 4 and ZRS.lastMenuSide=='PERSONAL')
-assert(ZRS.lastMenuStatus=='created')
+assert(ZRS.lastMenuStatus=='bulk option added')
+assert(lastMenu and lastMenu.bulk and #lastMenu.bulk.target==4)
+assert(lastMenu.bulk.label:find('markierte nehmen',1,true))
+lastMenu.bulk.callback(lastMenu.bulk.target,lastMenu.bulk.playerNum)
+assert(transfers==1)
 page:onJoypadDown(Joypad.XButton)
-assert(transfers==1 and vanillaX==0)
+assert(transfers==2 and vanillaX==0)
 assert(require('ZRS_Core').count(state)==0)
 page:onJoypadDown(Joypad.AButton)
 assert(vanillaA==2)
@@ -175,6 +191,7 @@ JoypadState.players[1]={id=2,focus=page}
 page.joyfocus=true
 page.inventoryPane.doController=true
 page:onJoypadDirRight()
+assert(ZRS.lastNav:find('RIGHT target=LOOT actual=LOOT',1,true))
 assert(focusSwitches==1 and lootPage.joyfocus and not page.joyfocus)
 assert(not lootPage.isCollapsed and not page.isCollapsed)
 assert(page.visible and lootPage.visible)
@@ -182,6 +199,7 @@ assert(page.visible and lootPage.visible)
 lootPage:onJoypadDirRight()
 assert(focusSwitches==1)
 lootPage:onJoypadDirLeft()
+assert(ZRS.lastNav:find('LEFT target=PERSONAL actual=PERSONAL',1,true))
 assert(focusSwitches==2 and page.joyfocus and not lootPage.joyfocus)
 page:onJoypadDirLeft()
 assert(focusSwitches==2)
@@ -197,9 +215,19 @@ page.inventoryPane.doController=false
 lootPage.isCollapsed=true
 lootPage:update()
 assert(lootPage.isCollapsed)
+-- Auto-collapse during controller focus must be suppressed, on either side.
+JoypadState.players[1].focus=page
+page.joyfocus=true
+lootPage.isCollapsed=false
+lootPage:collapseNow()
+assert(not lootPage.isCollapsed)
+JoypadState.players[1].focus=nil
+page.joyfocus=false
+lootPage:collapseNow()
+assert(lootPage.isCollapsed)
 
 -- Check the new pane context hook is restored after later UI replacement.
 ISInventoryPane.doContextOnJoypadSelected=function() error('late override') end
 ZRS.ensureHooks('mock')
 assert(ISInventoryPane.doContextOnJoypadSelected==ZRS.paneContextHook)
-print('OK: B42 A->pane menu 4 items, RT ranges, two-pane navigation, collapse repair, late rehook')
+print('OK: B42 bulk menu action invoked with 4 items, RT, directional navigation, collapse guard, late rehook')

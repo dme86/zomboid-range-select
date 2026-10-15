@@ -1,4 +1,4 @@
--- Zomboid Range Select v0.1.11 for Project Zomboid Build 42.
+-- Zomboid Range Select v0.1.12 for Project Zomboid Build 42.
 -- Poll the game's own inventory cursor and RT axis; do not intercept D-pad events.
 -- This is intentionally independent of the B42 joypad focus callback pipeline.
 require 'ISUI/ISInventoryPage'
@@ -8,7 +8,7 @@ local Core = require 'ZRS_Core'
 
 -- Persistent callbacks survive beyond this Lua file's scope.
 ZRS = ZRS or {}
-ZRS.version = '0.1.11'
+ZRS.version = '0.1.12'
 
 local oldDown = ISInventoryPage.onJoypadDown
 local oldPageUpdate = ISInventoryPage.update
@@ -242,8 +242,27 @@ local function menuForSelection(page, pane, state)
         return false
     end
     ZRS.lastMenuStatus = 'created'
+    -- The vanilla menu may still expose only per-item options even though it
+    -- receives multiple items. Add an explicit bulk action using PZ handlers.
+    if #items > 1 then
+        local label = inInv
+            and ('ZRS: ' .. #items .. ' markierte verschieben')
+            or ('ZRS: ' .. #items .. ' markierte nehmen')
+        local callback = inInv
+            and ISInventoryPaneContextMenu.onPutItems
+            or ISInventoryPaneContextMenu.onGrabItems
+        if callback and menu.addOptionOnTop then
+            menu:addOptionOnTop(label, items, callback, page.player)
+            ZRS.lastMenuStatus = 'bulk option added'
+        elseif callback and menu.addOption then
+            menu:addOption(label, items, callback, page.player)
+            ZRS.lastMenuStatus = 'bulk option appended'
+        else
+            ZRS.lastMenuStatus = 'bulk API unavailable'
+        end
+    end
     print('[ZomboidRangeSelect] multi-menu side=' .. ZRS.lastMenuSide ..
-        ' items=' .. #items)
+        ' items=' .. #items .. ' status=' .. ZRS.lastMenuStatus)
     menu.origin = page
     menu.mouseOver = 1
     if menu.numOptions > 1 then setJoypadFocus(page.player, menu) end
@@ -318,14 +337,32 @@ local function openInventoryPage(page)
     if collapsed then page.collapseCounter = 0 end
 end
 
-local function focusOnInventory(playerNum)
+local oldCollapseNow = ISInventoryPage.collapseNow
+
+local function focusedInventoryPage(playerNum)
     local inv, loot = panesFor(playerNum)
     local focused = getFocusForPlayer and getFocusForPlayer(playerNum)
-    return focused == inv or focused == loot
+    if focused == inv or focused == loot then return focused end
+    if inv and inv.joyfocus then return inv end
+    if loot and loot.joyfocus then return loot end
+    return nil
 end
 
--- Keep both panes visibly expanded while one inventory pane owns joypad focus.
--- Do not modify collapseNow or mouse behavior outside controller inventory.
+local function focusOnInventory(playerNum)
+    return focusedInventoryPage(playerNum) ~= nil
+end
+
+-- Mouse-away can collapse the other inventory page during D-pad focus changes.
+-- Outside controller inventory, delegate to native PZ unchanged.
+function ISInventoryPage:collapseNow(...)
+    local inv, loot = panesFor(self.player)
+    if (self == inv or self == loot) and focusOnInventory(self.player) then
+        self.collapseCounter = 0
+        return
+    end
+    if oldCollapseNow then return oldCollapseNow(self, ...) end
+end
+
 function ISInventoryPage:update(...)
     local result = oldPageUpdate(self, ...)
     if focusOnInventory(self.player) then
@@ -337,15 +374,26 @@ function ISInventoryPage:update(...)
 end
 
 local function switchPane(source, side)
+    ZRS.lastNav = string.upper(side) .. ' handler'
     local inv, loot = panesFor(source.player)
-    if not inv or not loot or (source ~= inv and source ~= loot) then return false end
-    if not isReady(source) then return false end
+    if not inv or not loot or (source ~= inv and source ~= loot) then
+        ZRS.lastNav = string.upper(side) .. ': no pages'
+        return false
+    end
+    if focusedInventoryPage(source.player) ~= source then
+        ZRS.lastNav = string.upper(side) .. ': source not focused'
+        return false
+    end
     local target = side == 'left' and inv or loot
     local state = source.inventoryPane and source.inventoryPane.zrsState
     if state and state.anchor then Core.release(state) end
     if target ~= source then setJoypadFocus(source.player, target) end
     openInventoryPage(inv)
     openInventoryPage(loot)
+    local actual = focusedInventoryPage(source.player)
+    ZRS.lastNav = string.upper(side) .. ' target=' ..
+        (target == inv and 'PERSONAL' or 'LOOT') .. ' actual=' ..
+        (actual == inv and 'PERSONAL' or actual == loot and 'LOOT' or 'OTHER')
     return true
 end
 
@@ -391,6 +439,7 @@ ZRS.pageButtonHook = ISInventoryPage.onJoypadDown
 ZRS.pageUpdateHook = ISInventoryPage.update
 ZRS.pageLeftHook = ISInventoryPage.onJoypadDirLeft
 ZRS.pageRightHook = ISInventoryPage.onJoypadDirRight
+ZRS.pageCollapseHook = ISInventoryPage.collapseNow
 
 function ZRS.ensureHooks(source)
     if not ISInventoryPane or not ISInventoryPage then return end
@@ -425,6 +474,10 @@ function ZRS.ensureHooks(source)
     if ISInventoryPage.onJoypadDirRight ~= ZRS.pageRightHook then
         oldDirRight = ISInventoryPage.onJoypadDirRight
         ISInventoryPage.onJoypadDirRight = ZRS.pageRightHook
+    end
+    if ISInventoryPage.collapseNow ~= ZRS.pageCollapseHook then
+        oldCollapseNow = ISInventoryPage.collapseNow
+        ISInventoryPage.collapseNow = ZRS.pageCollapseHook
     end
 end
 
@@ -467,4 +520,4 @@ registerEvent('OnGameStart', ZRS.onGameStart)
 registerEvent('OnCreatePlayer', ZRS.onCreatePlayer)
 registerEvent('OnPlayerUpdate', ZRS.onPlayerUpdate)
 registerEvent('OnTick', ZRS.onTick)
-print('[ZomboidRangeSelect] v0.1.11 directional focus and multi-item menu hooks installed')
+print('[ZomboidRangeSelect] v0.1.12 bulk menu and navigation diagnostics installed')

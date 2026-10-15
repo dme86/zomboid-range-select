@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.11 controller menu and navigation fix** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.12 bulk menu and navigation diagnostics** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -140,3 +140,7 @@ PZ 42's native A button invokes `ISInventoryPane:doContextOnJoypadSelected`. The
 In inventory focus only, D-pad **left means personal** and **right means loot**; pressing the direction of the current pane is a no-op rather than toggling. Both windows are re-expanded while joypad focus is on inventory; mouse auto-collapse stays vanilla outside inventory focus. This is a focused compatibility override, not a rewrite of controller movement.
 
 Test in a loaded save with 2+ selected items in **one pane**, release RT and press A in that same pane. The HUD should say `Menu: 2` (or more) and the menu should offer relevant multi-item options. Then press D-pad left/right and check the windows remain expanded. Automated mocks verify routing; actual PZ 42.21 remains the acceptance test.
+
+## v0.1.12
+
+Adds an explicitly labelled first context-menu option `ZRS: N markierte nehmen` for loot or `ZRS: N markierte verschieben` for carried items when 2+ items are selected. Delegates to native PZ item transfer callbacks. Vanilla menu item-type options are still shown. PZ may reject protected/favorited items according to its own validation. The HUD now shows `bulk option added` rather than simply `created` and a `Nav:` line describing whether a LEFT/RIGHT event arrived and where the focus ended up. During controller inventory focus, the native mouse-away collapse is suppressed; it remains enabled outside inventory focus. This build still needs live validation on B42.21.
