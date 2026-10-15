@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.5 prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.6 prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -13,7 +13,7 @@ The mod is a new, independent implementation. It does not contain the third-part
 - **X**: transfer selected items using vanilla transfer handlers.
 - **B**: clear the selection while selected; otherwise behaves normally.
 
-## What changed in v0.1.5
+## What changed in v0.1.6
 
 **No D-pad hooks.** The mod now polls the native inventory cursor (\`joyselection\`) and the RT analog value as the inventory UI updates. There is an independent \`OnTick\` fallback in case a UI update hook is replaced by another mod. This avoids the previous dependency on \`ISInventoryPage:onJoypadDirUp/Down\` callbacks.
 
@@ -48,6 +48,19 @@ Expected after entering a game with controller-focused inventory:
 - \`RT down\`, \`selected=N\`, \`RT up\`: trigger read and range selection working.
 
 If the log only contains the initial hook messages, **check whether a game world and the controller-focused inventory were actually reached**. The initial messages are also printed during menu Lua initialization.
+
+## World lifecycle reliability
+
+The old implementation installed its UI method wrappers and a file-local
+tick callback while Lua was loading in the main menu. This version keeps
+event callbacks in the persistent global `ZRS` table and registers
+`OnGameStart`, `OnCreatePlayer`, `OnPlayerUpdate` and `OnTick`.
+It checks whether the UI class methods were subsequently replaced by the
+game or another mod and reinstalls the same wrappers, without stacking them.
+
+These are defensive fixes, not proof of a specific cause on macOS.
+Look for `OnGameStart world entered`, `DIAG OnTick event fired` and
+`DIAG OnPlayerUpdate event fired` after loading a saved game.
 
 ## One diagnostic test in PZ 42.21
 

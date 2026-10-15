@@ -3,8 +3,16 @@ package.path = 'Contents/mods/ZomboidRangeSelect/42/media/lua/shared/?.lua;' .. 
 for _, name in ipairs({'ISUI/ISInventoryPage','ISUI/ISInventoryPane','ISUI/ISInventoryPaneContextMenu'}) do
     package.preload[name] = function() return true end
 end
-local tick
-Events = { OnTick = { Add = function(fn) tick = fn end } }
+local handlers = {}
+local function makeEvent(name)
+    return {Add = function(fn) handlers[name] = fn end}
+end
+Events = {
+    OnTick = makeEvent('OnTick'),
+    OnGameStart = makeEvent('OnGameStart'),
+    OnCreatePlayer = makeEvent('OnCreatePlayer'),
+    OnPlayerUpdate = makeEvent('OnPlayerUpdate'),
+}
 local rtValue = -1
 local vanillaA, vanillaX, menus, transfers = 0, 0, 0, 0
 Joypad = {AButton=1,BButton=2,XButton=3,YButton=4}
@@ -44,7 +52,21 @@ pane.inventoryPage=page
 getPlayerInventory=function(n) if n==0 then return page end end
 getPlayerLoot=function() return nil end
 assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/client/ZRS_Client.lua'))()
-assert(type(tick)=='function')
+assert(type(handlers.OnTick)=='function')
+assert(type(handlers.OnGameStart)=='function')
+assert(type(handlers.OnCreatePlayer)=='function')
+assert(type(handlers.OnPlayerUpdate)=='function')
+assert(type(ZRS.ensureHooks)=='function')
+local tick = handlers.OnTick
+handlers.OnGameStart()
+handlers.OnPlayerUpdate(player)
+local lateCalls = 0
+ISInventoryPane.update = function() lateCalls = lateCalls + 1 end
+assert(ISInventoryPane.update ~= ZRS.paneUpdateHook)
+tick()
+assert(ISInventoryPane.update == ZRS.paneUpdateHook)
+pane:update()
+assert(lateCalls == 1)
 
 -- Normal A remains immediately responsive.
 tick();page:onJoypadDown(Joypad.AButton)
@@ -97,4 +119,4 @@ pane.joyselection=4;tick()
 assert(state.selected[objects[5]])
 rtValue=-1;tick()
 
-print('OK: RT polled without D-pad callbacks, additive and shrinking ranges, A/X, axis 0..1, joypad mapping fallback')
+print('OK: persistent lifecycle handlers, late UI rehook, RT polling, additive ranges, A/X and controller fallback')

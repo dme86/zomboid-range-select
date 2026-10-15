@@ -1,10 +1,14 @@
--- Zomboid Range Select v0.1.5 for Project Zomboid Build 42.
+-- Zomboid Range Select v0.1.6 for Project Zomboid Build 42.
 -- Poll the game's own inventory cursor and RT axis; do not intercept D-pad events.
 -- This is intentionally independent of the B42 joypad focus callback pipeline.
 require 'ISUI/ISInventoryPage'
 require 'ISUI/ISInventoryPane'
 require 'ISUI/ISInventoryPaneContextMenu'
 local Core = require 'ZRS_Core'
+
+-- Persistent callbacks survive beyond this Lua file's scope.
+ZRS = ZRS or {}
+ZRS.version = '0.1.6'
 
 local oldDown = ISInventoryPage.onJoypadDown
 local oldPaneUpdate = ISInventoryPane.update
@@ -208,12 +212,7 @@ local function pollActivePages()
     end
 end
 
-if Events and Events.OnTick then
-    Events.OnTick.Add(pollActivePages)
-    print('[ZomboidRangeSelect] registered game-tick fallback')
-else
-    print('[ZomboidRangeSelect] OnTick unavailable; UI update polling only')
-end
+-- Event handlers are installed at the bottom of this file.
 
 local function actionItems(pane, state)
     Core.prune(state, pane.inventory)
@@ -295,4 +294,67 @@ function ISInventoryPane:prerender()
     self:setStencilRect(0, 0, self.width - 1, self.height - 1)
 end
 
-print('[ZomboidRangeSelect] v0.1.5 diagnostic polling hooks installed')
+-- Keep references to our own wrappers, independently of later UI loading.
+ZRS.paneUpdateHook = ISInventoryPane.update
+ZRS.paneRenderHook = ISInventoryPane.prerender
+ZRS.pageButtonHook = ISInventoryPage.onJoypadDown
+
+function ZRS.ensureHooks(source)
+    if not ISInventoryPane or not ISInventoryPage then return end
+    if ISInventoryPane.update ~= ZRS.paneUpdateHook then
+        oldPaneUpdate = ISInventoryPane.update
+        ISInventoryPane.update = ZRS.paneUpdateHook
+        print('[ZomboidRangeSelect] reattached pane update after ' .. source)
+    end
+    if ISInventoryPane.prerender ~= ZRS.paneRenderHook then
+        oldPrerender = ISInventoryPane.prerender
+        ISInventoryPane.prerender = ZRS.paneRenderHook
+        print('[ZomboidRangeSelect] reattached pane render after ' .. source)
+    end
+    if ISInventoryPage.onJoypadDown ~= ZRS.pageButtonHook then
+        oldDown = ISInventoryPage.onJoypadDown
+        ISInventoryPage.onJoypadDown = ZRS.pageButtonHook
+        print('[ZomboidRangeSelect] reattached page controller after ' .. source)
+    end
+end
+
+ZRS.onTick = function()
+    reportOnce('real-tick', 'OnTick event fired')
+    ZRS.ensureHooks('OnTick')
+    pollActivePages()
+end
+
+ZRS.onPlayerUpdate = function(player)
+    reportOnce('real-player-update', 'OnPlayerUpdate event fired')
+    ZRS._playerUpdates = (ZRS._playerUpdates or 0) + 1
+    if ZRS._playerUpdates % 10 == 1 then
+        ZRS.ensureHooks('OnPlayerUpdate')
+        pollActivePages()
+    end
+end
+
+ZRS.onGameStart = function()
+    print('[ZomboidRangeSelect] OnGameStart world entered')
+    ZRS.ensureHooks('OnGameStart')
+    pollActivePages()
+end
+
+ZRS.onCreatePlayer = function(index, player)
+    print('[ZomboidRangeSelect] OnCreatePlayer index=' .. tostring(index))
+    ZRS.ensureHooks('OnCreatePlayer')
+end
+
+local function registerEvent(name, fn)
+    local ev = Events and Events[name]
+    if ev and ev.Add then
+        ev.Add(fn)
+        print('[ZomboidRangeSelect] registered ' .. name)
+    else
+        print('[ZomboidRangeSelect] unavailable event: ' .. name)
+    end
+end
+registerEvent('OnGameStart', ZRS.onGameStart)
+registerEvent('OnCreatePlayer', ZRS.onCreatePlayer)
+registerEvent('OnPlayerUpdate', ZRS.onPlayerUpdate)
+registerEvent('OnTick', ZRS.onTick)
+print('[ZomboidRangeSelect] v0.1.6 persistent world lifecycle hooks installed')
