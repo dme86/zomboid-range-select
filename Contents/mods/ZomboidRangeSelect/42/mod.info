@@ -1,5 +1,5 @@
 name=Zomboid Range Select
 id=ZomboidRangeSelect
 author=dme86
-modversion=0.1.17
+modversion=0.1.18
 description=Hold RT and move D-pad up/down to mark item ranges, then use A or X for bulk actions. Works with polled cursor changes in B42.

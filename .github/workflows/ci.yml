@@ -16,9 +16,8 @@ jobs:
         run: |
           lua tests/test_core.lua
           lua tests/test_client_mock.lua
-          lua tests/test_runtime_probe.lua
       - name: Workshop package
-        run: zip -r ZomboidRangeSelect.zip Contents workshop.txt -x '*.DS_Store'
+        run: zip -r ZomboidRangeSelect.zip Contents workshop.txt preview.png -x '*.DS_Store'
       - uses: actions/upload-artifact@v4
         with:
           name: ZomboidRangeSelect

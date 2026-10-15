@@ -1,4 +1,4 @@
--- Zomboid Range Select v0.1.17 for Project Zomboid Build 42.
+-- Zomboid Range Select v0.1.18 for Project Zomboid Build 42.
 -- Poll the game's own inventory cursor and RT axis. Vertical D-pad navigation
 -- stays native; horizontal pane switching is suppressed while marks are pending.
 -- This is intentionally independent of the B42 joypad focus callback pipeline.
@@ -9,7 +9,7 @@ local Core = require 'ZRS_Core'
 
 -- Persistent callbacks survive beyond this Lua file's scope.
 ZRS = ZRS or {}
-ZRS.version = '0.1.17'
+ZRS.version = '0.1.18'
 
 local oldDown = ISInventoryPage.onJoypadDown
 local oldDirLeft = ISInventoryPage.onJoypadDirLeft
@@ -17,29 +17,6 @@ local oldDirRight = ISInventoryPage.onJoypadDirRight
 local oldPaneContext = ISInventoryPane.doContextOnJoypadSelected
 local oldPaneUpdate = ISInventoryPane.update
 local oldPrerender = ISInventoryPane.prerender
-
--- Low-volume diagnostic breadcrumbs. Report each state once, not on every frame.
-local diagnosticsSeen = {}
-local function reportOnce(key, message)
-    if diagnosticsSeen[key] then return end
-    diagnosticsSeen[key] = true
-    print('[ZomboidRangeSelect] DIAG ' .. message)
-end
-
-local function focusDetails(page)
-    local pane = page and page.inventoryPane
-    if not pane then return 'no pane' end
-    local jd = JoypadState and JoypadState.players and
-        JoypadState.players[(page.player or 0) + 1]
-    return 'pane=' .. tostring(pane.mode) ..
-        ' rows=' .. tostring(pane.items and #pane.items) ..
-        ' cursor=' .. tostring(pane.joyselection) ..
-        ' pageFocus=' .. tostring(page.joyfocus ~= nil and page.joyfocus ~= false) ..
-        ' paneController=' .. tostring(pane.doController) ..
-        ' pad=' .. tostring(jd and jd.id) ..
-        ' routedFocus=' .. tostring(jd and jd.focus) ..
-        ' self=' .. tostring(page)
-end
 
 local function isItem(row)
     return instanceof(row, 'InventoryItem')
@@ -112,15 +89,6 @@ local function isReady(page)
     return ready
 end
 
-local lastRuntimeStatus = {}
-local function runtimeNote(page, id, value)
-    local key = tostring(page.player) .. ':' .. tostring(id)
-    if lastRuntimeStatus[key] then return end
-    lastRuntimeStatus[key] = true
-    print('[ZomboidRangeSelect] inventory polling active: player=' ..
-        tostring(page.player) .. ' pad=' .. tostring(id) .. ' RT=' .. tostring(value))
-end
-
 local function hasPendingSelection(page)
     local pane = page and page.inventoryPane
     local state = pane and pane.zrsState
@@ -131,12 +99,7 @@ local function hasPendingSelection(page)
 end
 
 local function pollPane(page)
-    local ready, reason = readyStatus(page)
-    -- Trace the branch that stops the entire selection before returning.
-    if page then
-        reportOnce('status:' .. tostring(page.onCharacter) .. ':' .. reason,
-            'inventory gate: ' .. reason .. ' ' .. focusDetails(page))
-    end
+    local ready = readyStatus(page)
     if not ready then
         local pane = page and page.inventoryPane
         local state = pane and pane.zrsState
@@ -153,17 +116,7 @@ local function pollPane(page)
     local state = stateFor(pane)
     local id = controllerId(page.player)
     local value = triggerValue(id)
-    runtimeNote(page, id, value)
-    local axisState = value == nil and 'unavailable' or
-        (value > 0.25 and 'held' or 'released')
-    reportOnce('axis:' .. axisState, 'RT axis ' .. axisState ..
-        ' id=' .. tostring(id) .. ' value=' .. tostring(value))
     if value == nil then
-        if not state.zrsNoAxisNoted then
-            print('[ZomboidRangeSelect] RT axis unavailable. ' ..
-                'Check gamepad binding in PZ (controller id=' .. tostring(id) .. ').')
-            state.zrsNoAxisNoted = true
-        end
         if state.anchor then Core.release(state) end
         state.zrsHeld = false
         state.zrsLastCursor = cursor
@@ -176,19 +129,12 @@ local function pollPane(page)
         -- Use the previous observed cursor, even if RT and D-pad changed between
         -- two UI updates. No D-pad callback or button mapping is required.
         Core.begin(state, state.zrsLastCursor or cursor)
-        print('[ZomboidRangeSelect] RT down; anchor=' .. tostring(state.anchor) ..
-            ' value=' .. tostring(value))
     elseif not held and state.zrsHeld then
         if state.anchor then Core.release(state) end
-        print('[ZomboidRangeSelect] RT up; selected=' .. Core.count(state))
     end
 
     if held and state.anchor and (state.zrsLastCursor ~= cursor or not state.dragging) then
-        local didExtend = Core.extend(state, pane.items, cursor, isItem)
-        if didExtend then
-            print('[ZomboidRangeSelect] selected=' .. Core.count(state) ..
-                ' cursor=' .. cursor)
-        end
+        Core.extend(state, pane.items, cursor, isItem)
     end
 
     state.zrsHeld = held
@@ -199,26 +145,19 @@ end
 -- Called from both the pane's UI update and PZ's game tick. Either entry
 -- point is sufficient; the state machine is idempotent when both run.
 function ISInventoryPane:update()
-    reportOnce('pane-update', 'ISInventoryPane:update reached')
     oldPaneUpdate(self)
     if self.inventoryPage then
         pollPane(self.inventoryPage)
-    else
-        reportOnce('no-pane-parent', 'ISInventoryPane:update without inventoryPage')
     end
 end
 
 local function pollActivePages()
-    reportOnce('tick', 'Events.OnTick executing')
     for playerNum = 0, 3 do
         if getSpecificPlayer(playerNum) then
-            reportOnce('player:' .. playerNum, 'game world player ' .. playerNum .. ' found')
             local inv = getPlayerInventory(playerNum)
             local loot = getPlayerLoot(playerNum)
             if inv and inv.inventoryPane then
                 pollPane(inv)
-            elseif playerNum == 0 then
-                reportOnce('no-inventory-page', 'getPlayerInventory(0) has no inventoryPane')
             end
             if loot and loot ~= inv and loot.inventoryPane then pollPane(loot) end
         end
@@ -241,7 +180,7 @@ local function menuForSelection(page, pane, state)
     local y = pane:getAbsoluteY() + 8 + ((rowIndex(pane) or 1) - 1) *
         pane.itemHgt + pane:getYScroll()
     -- Pass all selected items, not just the focused row, into the vanilla menu.
-    -- Keep a HUD-visible record so selection vs menu-routing bugs are distinct.
+    -- Keep a small state record for compatibility with the regression tests.
     ZRS.lastMenuCount = #items
     ZRS.lastMenuSide = page.onCharacter and 'PERSONAL' or 'LOOT'
     local menu = ISInventoryPaneContextMenu.createMenu(
@@ -254,8 +193,6 @@ local function menuForSelection(page, pane, state)
     -- "Nehmen" and "Verschieben nach" handlers operate on every marked item;
     -- adding a separate ZRS action would only duplicate those menu entries.
     ZRS.lastMenuStatus = 'vanilla multi-item menu'
-    print('[ZomboidRangeSelect] multi-menu side=' .. ZRS.lastMenuSide ..
-        ' items=' .. #items .. ' status=' .. ZRS.lastMenuStatus)
     menu.origin = page
     menu.mouseOver = 1
     if menu.numOptions > 1 then setJoypadFocus(page.player, menu) end
@@ -294,8 +231,6 @@ end
 -- Leave A to the original page handler, which invokes the pane method above.
 -- X/B work with selections only in the currently focused pane.
 function ISInventoryPage:onJoypadDown(button)
-    reportOnce('page-button', 'ISInventoryPage:onJoypadDown reached: ' ..
-        tostring(button) .. ' ' .. focusDetails(self))
     if not isReady(self) then return oldDown(self, button) end
     pollPane(self)
     local state = stateFor(self.inventoryPane)
@@ -333,10 +268,9 @@ local function isSelectionLocked(page)
 end
 
 function ISInventoryPage:onJoypadDirLeft(...)
-    local locked, count = isSelectionLocked(self)
+    local locked = isSelectionLocked(self)
     if locked then
         ZRS.lastNav = 'LEFT ignored while selection is pending'
-        print('[ZomboidRangeSelect] LEFT ignored; pending selection=' .. count)
         return
     end
     ZRS.lastNav = 'LEFT handled by vanilla'
@@ -344,10 +278,9 @@ function ISInventoryPage:onJoypadDirLeft(...)
 end
 
 function ISInventoryPage:onJoypadDirRight(...)
-    local locked, count = isSelectionLocked(self)
+    local locked = isSelectionLocked(self)
     if locked then
         ZRS.lastNav = 'RIGHT ignored while selection is pending'
-        print('[ZomboidRangeSelect] RIGHT ignored; pending selection=' .. count)
         return
     end
     ZRS.lastNav = 'RIGHT handled by vanilla'
@@ -357,7 +290,6 @@ end
 -- The vanilla controller clears pane.selected every frame. Our selected items
 -- live in separate state, highlighted without modifying native inventory rows.
 function ISInventoryPane:prerender()
-    reportOnce('pane-prerender', 'ISInventoryPane:prerender reached')
     oldPrerender(self)
     if not self.inventoryPage or not isReady(self.inventoryPage) then return end
     local state = self.zrsState
@@ -394,27 +326,23 @@ ZRS.pageButtonHook = ISInventoryPage.onJoypadDown
 ZRS.pageLeftHook = ISInventoryPage.onJoypadDirLeft
 ZRS.pageRightHook = ISInventoryPage.onJoypadDirRight
 
-function ZRS.ensureHooks(source)
+function ZRS.ensureHooks()
     if not ISInventoryPane or not ISInventoryPage then return end
     if ISInventoryPane.update ~= ZRS.paneUpdateHook then
         oldPaneUpdate = ISInventoryPane.update
         ISInventoryPane.update = ZRS.paneUpdateHook
-        print('[ZomboidRangeSelect] reattached pane update after ' .. source)
     end
     if ISInventoryPane.prerender ~= ZRS.paneRenderHook then
         oldPrerender = ISInventoryPane.prerender
         ISInventoryPane.prerender = ZRS.paneRenderHook
-        print('[ZomboidRangeSelect] reattached pane render after ' .. source)
     end
     if ISInventoryPage.onJoypadDown ~= ZRS.pageButtonHook then
         oldDown = ISInventoryPage.onJoypadDown
         ISInventoryPage.onJoypadDown = ZRS.pageButtonHook
-        print('[ZomboidRangeSelect] reattached page controller after ' .. source)
     end
     if ISInventoryPane.doContextOnJoypadSelected ~= ZRS.paneContextHook then
         oldPaneContext = ISInventoryPane.doContextOnJoypadSelected
         ISInventoryPane.doContextOnJoypadSelected = ZRS.paneContextHook
-        print('[ZomboidRangeSelect] reattached multi-item context hook after ' .. source)
     end
     if ISInventoryPage.onJoypadDirLeft ~= ZRS.pageLeftHook then
         oldDirLeft = ISInventoryPage.onJoypadDirLeft
@@ -427,42 +355,34 @@ function ZRS.ensureHooks(source)
 end
 
 ZRS.onTick = function()
-    reportOnce('real-tick', 'OnTick event fired')
-    ZRS.ensureHooks('OnTick')
+    ZRS.ensureHooks()
     pollActivePages()
 end
 
 ZRS.onPlayerUpdate = function(player)
-    reportOnce('real-player-update', 'OnPlayerUpdate event fired')
     ZRS._playerUpdates = (ZRS._playerUpdates or 0) + 1
     if ZRS._playerUpdates % 10 == 1 then
-        ZRS.ensureHooks('OnPlayerUpdate')
+        ZRS.ensureHooks()
         pollActivePages()
     end
 end
 
 ZRS.onGameStart = function()
-    print('[ZomboidRangeSelect] OnGameStart world entered')
-    ZRS.ensureHooks('OnGameStart')
+    ZRS.ensureHooks()
     pollActivePages()
 end
 
 ZRS.onCreatePlayer = function(index, player)
-    print('[ZomboidRangeSelect] OnCreatePlayer index=' .. tostring(index))
-    ZRS.ensureHooks('OnCreatePlayer')
+    ZRS.ensureHooks()
 end
 
 local function registerEvent(name, fn)
     local ev = Events and Events[name]
     if ev and ev.Add then
         ev.Add(fn)
-        print('[ZomboidRangeSelect] registered ' .. name)
-    else
-        print('[ZomboidRangeSelect] unavailable event: ' .. name)
     end
 end
 registerEvent('OnGameStart', ZRS.onGameStart)
 registerEvent('OnCreatePlayer', ZRS.onCreatePlayer)
 registerEvent('OnPlayerUpdate', ZRS.onPlayerUpdate)
 registerEvent('OnTick', ZRS.onTick)
-print('[ZomboidRangeSelect] v0.1.17 vanilla multi-item menu and range selection installed')
