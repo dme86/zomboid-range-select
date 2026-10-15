@@ -1,5 +1,6 @@
--- Zomboid Range Select v0.1.12 for Project Zomboid Build 42.
--- Poll the game's own inventory cursor and RT axis; do not intercept D-pad events.
+-- Zomboid Range Select v0.1.17 for Project Zomboid Build 42.
+-- Poll the game's own inventory cursor and RT axis. Vertical D-pad navigation
+-- stays native; horizontal pane switching is suppressed while marks are pending.
 -- This is intentionally independent of the B42 joypad focus callback pipeline.
 require 'ISUI/ISInventoryPage'
 require 'ISUI/ISInventoryPane'
@@ -8,10 +9,9 @@ local Core = require 'ZRS_Core'
 
 -- Persistent callbacks survive beyond this Lua file's scope.
 ZRS = ZRS or {}
-ZRS.version = '0.1.12'
+ZRS.version = '0.1.17'
 
 local oldDown = ISInventoryPage.onJoypadDown
-local oldPageUpdate = ISInventoryPage.update
 local oldDirLeft = ISInventoryPage.onJoypadDirLeft
 local oldDirRight = ISInventoryPage.onJoypadDirRight
 local oldPaneContext = ISInventoryPane.doContextOnJoypadSelected
@@ -119,6 +119,15 @@ local function runtimeNote(page, id, value)
     lastRuntimeStatus[key] = true
     print('[ZomboidRangeSelect] inventory polling active: player=' ..
         tostring(page.player) .. ' pad=' .. tostring(id) .. ' RT=' .. tostring(value))
+end
+
+local function hasPendingSelection(page)
+    local pane = page and page.inventoryPane
+    local state = pane and pane.zrsState
+    if not state then return false, 0 end
+    if pane.inventory then Core.prune(state, pane.inventory) end
+    local count = Core.count(state)
+    return state.anchor ~= nil or state.zrsHeld == true or count > 0, count
 end
 
 local function pollPane(page)
@@ -241,26 +250,10 @@ local function menuForSelection(page, pane, state)
         ZRS.lastMenuStatus = 'vanilla menu returned nil'
         return false
     end
-    ZRS.lastMenuStatus = 'created'
-    -- The vanilla menu may still expose only per-item options even though it
-    -- receives multiple items. Add an explicit bulk action using PZ handlers.
-    if #items > 1 then
-        local label = inInv
-            and ('ZRS: ' .. #items .. ' markierte verschieben')
-            or ('ZRS: ' .. #items .. ' markierte nehmen')
-        local callback = inInv
-            and ISInventoryPaneContextMenu.onPutItems
-            or ISInventoryPaneContextMenu.onGrabItems
-        if callback and menu.addOptionOnTop then
-            menu:addOptionOnTop(label, items, callback, page.player)
-            ZRS.lastMenuStatus = 'bulk option added'
-        elseif callback and menu.addOption then
-            menu:addOption(label, items, callback, page.player)
-            ZRS.lastMenuStatus = 'bulk option appended'
-        else
-            ZRS.lastMenuStatus = 'bulk API unavailable'
-        end
-    end
+    -- Vanilla Build 42 accepts the complete item list here. Its normal
+    -- "Nehmen" and "Verschieben nach" handlers operate on every marked item;
+    -- adding a separate ZRS action would only duplicate those menu entries.
+    ZRS.lastMenuStatus = 'vanilla multi-item menu'
     print('[ZomboidRangeSelect] multi-menu side=' .. ZRS.lastMenuSide ..
         ' items=' .. #items .. ' status=' .. ZRS.lastMenuStatus)
     menu.origin = page
@@ -306,104 +299,58 @@ function ISInventoryPage:onJoypadDown(button)
     if not isReady(self) then return oldDown(self, button) end
     pollPane(self)
     local state = stateFor(self.inventoryPane)
-    if state.anchor then return oldDown(self, button) end
     if Core.count(state) == 0 then return oldDown(self, button) end
+
+    -- Pressing an action while RT is still down commits the marked range.
+    -- Previously X fell through to vanilla here and transferred only the
+    -- focused row, even though multiple rows were visibly highlighted.
+    if button == Joypad.AButton or button == Joypad.XButton or
+            button == Joypad.BButton then
+        if state.anchor then Core.release(state) end
+    end
     if button == Joypad.XButton and transferSelection(self, self.inventoryPane, state) then
         return
     elseif button == Joypad.BButton then
         Core.clear(state)
         return
+    elseif button == Joypad.YButton then
+        -- Do not retain a pending range after intentionally closing inventory.
+        Core.clear(state)
     end
     return oldDown(self, button)
 end
 
--- Directional navigation while inventory is controller-focused:
--- LEFT means the personal inventory, RIGHT means loot. Vanilla 42 toggles
--- sides on *either* direction; do not do that for repeated same-direction input.
-local function panesFor(playerNum)
-    return getPlayerInventory(playerNum), getPlayerLoot(playerNum)
-end
-
-local function openInventoryPage(page)
-    if not page then return end
-    local collapsed = page.isCollapsed
-    if collapsed then
-        page.isCollapsed = false
-        if page.clearMaxDrawHeight then page:clearMaxDrawHeight() end
-    end
-    if page.getIsVisible and not page:getIsVisible() then
-        page:setVisible(true)
-    end
-    if collapsed then page.collapseCounter = 0 end
-end
-
-local oldCollapseNow = ISInventoryPage.collapseNow
-
-local function focusedInventoryPage(playerNum)
-    local inv, loot = panesFor(playerNum)
-    local focused = getFocusForPlayer and getFocusForPlayer(playerNum)
-    if focused == inv or focused == loot then return focused end
-    if inv and inv.joyfocus then return inv end
-    if loot and loot.joyfocus then return loot end
-    return nil
-end
-
-local function focusOnInventory(playerNum)
-    return focusedInventoryPage(playerNum) ~= nil
-end
-
--- Mouse-away can collapse the other inventory page during D-pad focus changes.
--- Outside controller inventory, delegate to native PZ unchanged.
-function ISInventoryPage:collapseNow(...)
-    local inv, loot = panesFor(self.player)
-    if (self == inv or self == loot) and focusOnInventory(self.player) then
-        self.collapseCounter = 0
-        return
-    end
-    if oldCollapseNow then return oldCollapseNow(self, ...) end
-end
-
-function ISInventoryPage:update(...)
-    local result = oldPageUpdate(self, ...)
-    if focusOnInventory(self.player) then
-        local inv, loot = panesFor(self.player)
-        openInventoryPage(inv)
-        openInventoryPage(loot)
-    end
-    return result
-end
-
-local function switchPane(source, side)
-    ZRS.lastNav = string.upper(side) .. ' handler'
-    local inv, loot = panesFor(source.player)
-    if not inv or not loot or (source ~= inv and source ~= loot) then
-        ZRS.lastNav = string.upper(side) .. ': no pages'
-        return false
-    end
-    if focusedInventoryPage(source.player) ~= source then
-        ZRS.lastNav = string.upper(side) .. ': source not focused'
-        return false
-    end
-    local target = side == 'left' and inv or loot
-    local state = source.inventoryPane and source.inventoryPane.zrsState
-    if state and state.anchor then Core.release(state) end
-    if target ~= source then setJoypadFocus(source.player, target) end
-    openInventoryPage(inv)
-    openInventoryPage(loot)
-    local actual = focusedInventoryPage(source.player)
-    ZRS.lastNav = string.upper(side) .. ' target=' ..
-        (target == inv and 'PERSONAL' or 'LOOT') .. ' actual=' ..
-        (actual == inv and 'PERSONAL' or actual == loot and 'LOOT' or 'OTHER')
-    return true
+-- Do not let horizontal D-pad input leave the pane while a range is being
+-- marked or while committed marks are waiting for A/X/B. PZ auto-collapses
+-- an unpinned inventory after the focus changes; allowing LEFT/RIGHT after RT
+-- was released therefore hid the source pane and stranded its selection.
+-- Outside a selection, preserve PZ's native pane-switching behavior.
+local function isSelectionLocked(page)
+    -- Direction callbacks may be the first UI callback in the frame where RT
+    -- was pressed, so sample the trigger before deciding whether to switch.
+    if page and isReady(page) then pollPane(page) end
+    return hasPendingSelection(page)
 end
 
 function ISInventoryPage:onJoypadDirLeft(...)
-    if switchPane(self, 'left') then return end
+    local locked, count = isSelectionLocked(self)
+    if locked then
+        ZRS.lastNav = 'LEFT ignored while selection is pending'
+        print('[ZomboidRangeSelect] LEFT ignored; pending selection=' .. count)
+        return
+    end
+    ZRS.lastNav = 'LEFT handled by vanilla'
     if oldDirLeft then return oldDirLeft(self, ...) end
 end
 
 function ISInventoryPage:onJoypadDirRight(...)
-    if switchPane(self, 'right') then return end
+    local locked, count = isSelectionLocked(self)
+    if locked then
+        ZRS.lastNav = 'RIGHT ignored while selection is pending'
+        print('[ZomboidRangeSelect] RIGHT ignored; pending selection=' .. count)
+        return
+    end
+    ZRS.lastNav = 'RIGHT handled by vanilla'
     if oldDirRight then return oldDirRight(self, ...) end
 end
 
@@ -418,17 +365,25 @@ function ISInventoryPane:prerender()
     if not self.itemHgt or self.itemHgt <= 0 or not self.headerHgt then return end
     local height = self.height - self.headerHgt - 1
     if height <= 0 then return end
-    self:setStencilRect(0, self.headerHgt, self.width - 1, height)
     local scroll = self:getYScroll()
     local first = math.max(1, math.floor(-scroll / self.itemHgt) - 1)
     local last = math.min(#self.items, math.ceil((self.height - scroll) / self.itemHgt) + 1)
     for i = first, last do
         if Core.isRowFullySelected(state, self.items[i], isItem) then
             local y = self.headerHgt + (i - 1) * self.itemHgt
-            self:drawRect(1, y, self.width - 2, self.itemHgt, 0.3, 0.28, 0.65, 1)
+            -- Clip numerically instead of touching PZ's shared stencil buffer.
+            -- drawRect() applies yScroll, so convert to screen-local Y only for
+            -- calculating the visible portion, then draw in content coordinates.
+            local screenY = y + scroll
+            local visibleTop = math.max(self.headerHgt, screenY)
+            local visibleBottom = math.min(self.height - 1, screenY + self.itemHgt)
+            if visibleTop < visibleBottom then
+                local clippedY = y + (visibleTop - screenY)
+                self:drawRect(1, clippedY, self.width - 2,
+                    visibleBottom - visibleTop, 0.3, 0.28, 0.65, 1)
+            end
         end
     end
-    self:setStencilRect(0, 0, self.width - 1, self.height - 1)
 end
 
 -- Keep references to our own wrappers, independently of later UI loading.
@@ -436,10 +391,8 @@ ZRS.paneUpdateHook = ISInventoryPane.update
 ZRS.paneRenderHook = ISInventoryPane.prerender
 ZRS.paneContextHook = ISInventoryPane.doContextOnJoypadSelected
 ZRS.pageButtonHook = ISInventoryPage.onJoypadDown
-ZRS.pageUpdateHook = ISInventoryPage.update
 ZRS.pageLeftHook = ISInventoryPage.onJoypadDirLeft
 ZRS.pageRightHook = ISInventoryPage.onJoypadDirRight
-ZRS.pageCollapseHook = ISInventoryPage.collapseNow
 
 function ZRS.ensureHooks(source)
     if not ISInventoryPane or not ISInventoryPage then return end
@@ -463,10 +416,6 @@ function ZRS.ensureHooks(source)
         ISInventoryPane.doContextOnJoypadSelected = ZRS.paneContextHook
         print('[ZomboidRangeSelect] reattached multi-item context hook after ' .. source)
     end
-    if ISInventoryPage.update ~= ZRS.pageUpdateHook then
-        oldPageUpdate = ISInventoryPage.update
-        ISInventoryPage.update = ZRS.pageUpdateHook
-    end
     if ISInventoryPage.onJoypadDirLeft ~= ZRS.pageLeftHook then
         oldDirLeft = ISInventoryPage.onJoypadDirLeft
         ISInventoryPage.onJoypadDirLeft = ZRS.pageLeftHook
@@ -474,10 +423,6 @@ function ZRS.ensureHooks(source)
     if ISInventoryPage.onJoypadDirRight ~= ZRS.pageRightHook then
         oldDirRight = ISInventoryPage.onJoypadDirRight
         ISInventoryPage.onJoypadDirRight = ZRS.pageRightHook
-    end
-    if ISInventoryPage.collapseNow ~= ZRS.pageCollapseHook then
-        oldCollapseNow = ISInventoryPage.collapseNow
-        ISInventoryPage.collapseNow = ZRS.pageCollapseHook
     end
 end
 
@@ -520,4 +465,4 @@ registerEvent('OnGameStart', ZRS.onGameStart)
 registerEvent('OnCreatePlayer', ZRS.onCreatePlayer)
 registerEvent('OnPlayerUpdate', ZRS.onPlayerUpdate)
 registerEvent('OnTick', ZRS.onTick)
-print('[ZomboidRangeSelect] v0.1.12 bulk menu and navigation diagnostics installed')
+print('[ZomboidRangeSelect] v0.1.17 vanilla multi-item menu and range selection installed')

@@ -57,7 +57,7 @@ end
 -- On-screen diagnostics deliberately bypass the console/debug log.
 -- TextManager:DrawString is used directly from PZ's post-UI render event.
 -- This probe never changes controller input or the inventory selection.
-probe.overlayVersion = '0.1.12'
+probe.overlayVersion = '0.1.17'
 probe.renderedFrames = 0
 
 local function safeCall(fn, fallback)
@@ -139,7 +139,12 @@ local function windowsStatus(player)
     elseif focus == loot and loot ~= nil then location = 'LOOT' end
     local function brief(page)
         if not page then return 'missing' end
-        return 'collapsed=' .. tostring(page.isCollapsed) ..
+        local visible = safeCall(function() return page:getIsVisible() end, '?')
+        local really = safeCall(function() return page:isReallyVisible() end, '?')
+        local maxH = safeCall(function() return page:getMaxDrawHeight() end, '?')
+        return 'vis=' .. tostring(visible) .. ',real=' .. tostring(really) ..
+            ',collapsed=' .. tostring(page.isCollapsed) ..
+            ',maxH=' .. tostring(maxH) ..
             ',joy=' .. tostring(page.joyfocus ~= nil and page.joyfocus ~= false)
     end
     return 'Windows focus=' .. location .. ' P[' .. brief(personal) ..
@@ -190,5 +195,5 @@ end
 if Events and Events.OnPostUIDraw then
     probe.handlers.DebugHUD = probe.drawHUD
     Events.OnPostUIDraw.Add(probe.handlers.DebugHUD)
-    print('[ZRS-PROBE] DEBUG HUD registered v0.1.8')
+    print('[ZRS-PROBE] DEBUG HUD registered v' .. probe.overlayVersion)
 end

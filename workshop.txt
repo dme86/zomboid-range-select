@@ -1,6 +1,6 @@
 version=1
 workshopid=0
 title=Zomboid Range Select
-description=Hold A and move with D-pad to select inventory and loot items, including disjoint ranges. Build 42.
+description=Hold RT and move D-pad up/down to mark inventory or loot items, including disjoint ranges. Use A for the normal multi-item context menu or X to transfer. Build 42.
 visibility=private
 tags=Build 42;Interface

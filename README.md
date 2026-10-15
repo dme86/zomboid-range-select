@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.12 bulk menu and navigation diagnostics** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.17 controller range selection** for Project Zomboid Build 42, verified in the live game on macOS with an 8BitDo controller.
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -42,7 +42,7 @@ grep -F '[ZomboidRangeSelect]' ~/Zomboid/console.txt
 \`\`\`
 
 Expected after entering a game with controller-focused inventory:
-- \`v0.1.4 polling selection hooks installed\`: the Lua file was evaluated.
+- \`v0.1.17 vanilla multi-item menu and range selection installed\`: the Lua file was evaluated.
 - \`registered game-tick fallback\`: the independent game-tick callback was registered.
 - \`inventory polling active\`: inventory callbacks/game tick executed, and an inventory pane received controller focus.
 - \`RT down\`, \`selected=N\`, \`RT up\`: trigger read and range selection working.
@@ -90,10 +90,11 @@ in that case we'll examine mod load timing or overridden functions, not the 8Bit
 \`\`\`sh
 lua tests/test_core.lua
 lua tests/test_client_mock.lua
+lua tests/test_runtime_probe.lua
 find Contents -type f -name '*.lua' -exec luac -p {} \;
 \`\`\`
 
-CI runs syntax and mock tests and creates a ZIP artifact. Live PZ 42.21 and macOS 8BitDo controller testing remain outstanding.
+CI runs syntax and mock tests and creates a ZIP artifact. The v0.1.17 behavior has also been confirmed in live PZ 42.21 on macOS with an 8BitDo controller.
 
 ## License
 
@@ -144,3 +145,11 @@ Test in a loaded save with 2+ selected items in **one pane**, release RT and pre
 ## v0.1.12
 
 Adds an explicitly labelled first context-menu option `ZRS: N markierte nehmen` for loot or `ZRS: N markierte verschieben` for carried items when 2+ items are selected. Delegates to native PZ item transfer callbacks. Vanilla menu item-type options are still shown. PZ may reject protected/favorited items according to its own validation. The HUD now shows `bulk option added` rather than simply `created` and a `Nav:` line describing whether a LEFT/RIGHT event arrived and where the focus ended up. During controller inventory focus, the native mouse-away collapse is suppressed; it remains enabled outside inventory focus. This build still needs live validation on B42.21.
+
+## v0.1.17
+
+The live-tested controller flow now keeps the current inventory pane open while an RT selection is pending. Left/right D-pad input is ignored only during that pending selection and is delegated back to vanilla as soon as the marks are cleared. This removes the asymmetric window disappearance without globally overriding inventory collapse or focus behavior.
+
+Pressing **A** with marked items now opens PZ's normal context menu with the complete selected-item list. The redundant custom `ZRS: N markierte ...` entry has been removed, so native actions such as **Nehmen** and **Verschieben nach** apply to the selection. **X** directly transfers all marked items, including when pressed before RT is released; **B** clears the marks.
+
+The selection overlay no longer changes PZ's shared stencil buffer. Its highlight rectangles are clipped numerically, preventing one inventory pane's rendering from clipping or hiding the other pane.
