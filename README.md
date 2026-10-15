@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.4 prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.5 prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -13,7 +13,7 @@ The mod is a new, independent implementation. It does not contain the third-part
 - **X**: transfer selected items using vanilla transfer handlers.
 - **B**: clear the selection while selected; otherwise behaves normally.
 
-## What changed in v0.1.4
+## What changed in v0.1.5
 
 **No D-pad hooks.** The mod now polls the native inventory cursor (\`joyselection\`) and the RT analog value as the inventory UI updates. There is an independent \`OnTick\` fallback in case a UI update hook is replaced by another mod. This avoids the previous dependency on \`ISInventoryPage:onJoypadDirUp/Down\` callbacks.
 
@@ -48,6 +48,29 @@ Expected after entering a game with controller-focused inventory:
 - \`RT down\`, \`selected=N\`, \`RT up\`: trigger read and range selection working.
 
 If the log only contains the initial hook messages, **check whether a game world and the controller-focused inventory were actually reached**. The initial messages are also printed during menu Lua initialization.
+
+## One diagnostic test in PZ 42.21
+
+After installing and restarting, **load the actual game save**, not just the main menu.
+Open the inventory with your controller, move the D-pad two rows, hold RT and move
+two more rows, then release RT. Extract only these lines:
+
+```fish
+grep -F '[ZomboidRangeSelect]' ~/Zomboid/console.txt | tail -50
+```
+
+Diagnostic messages are one-shot per distinct state, so normal navigation will not
+flood the console. Their meaning:
+
+- `DIAG Events.OnTick executing`: the registered game-tick callback actually runs.
+- `DIAG ISInventoryPane:update reached` or `prerender reached`: Lua UI hooks execute.
+- `DIAG inventory gate: ...`: shows the precise readiness condition that is blocking selection.
+- `DIAG RT axis held`: the controller's analog RT input is actually being read.
+- `inventory polling active`, `RT down`, `selected=`: state machine reached.
+
+No `DIAG` lines beyond `hooks installed` after loading and navigating the inventory
+means the Lua hooks or registered events are not being invoked in the running game;
+in that case we'll examine mod load timing or overridden functions, not the 8BitDo mapping.
 
 ## Tests
 

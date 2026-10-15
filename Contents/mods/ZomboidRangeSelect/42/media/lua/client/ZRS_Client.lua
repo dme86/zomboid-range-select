@@ -1,4 +1,4 @@
--- Zomboid Range Select v0.1.4 for Project Zomboid Build 42.
+-- Zomboid Range Select v0.1.5 for Project Zomboid Build 42.
 -- Poll the game's own inventory cursor and RT axis; do not intercept D-pad events.
 -- This is intentionally independent of the B42 joypad focus callback pipeline.
 require 'ISUI/ISInventoryPage'
@@ -9,6 +9,29 @@ local Core = require 'ZRS_Core'
 local oldDown = ISInventoryPage.onJoypadDown
 local oldPaneUpdate = ISInventoryPane.update
 local oldPrerender = ISInventoryPane.prerender
+
+-- Low-volume diagnostic breadcrumbs. Report each state once, not on every frame.
+local diagnosticsSeen = {}
+local function reportOnce(key, message)
+    if diagnosticsSeen[key] then return end
+    diagnosticsSeen[key] = true
+    print('[ZomboidRangeSelect] DIAG ' .. message)
+end
+
+local function focusDetails(page)
+    local pane = page and page.inventoryPane
+    if not pane then return 'no pane' end
+    local jd = JoypadState and JoypadState.players and
+        JoypadState.players[(page.player or 0) + 1]
+    return 'pane=' .. tostring(pane.mode) ..
+        ' rows=' .. tostring(pane.items and #pane.items) ..
+        ' cursor=' .. tostring(pane.joyselection) ..
+        ' pageFocus=' .. tostring(page.joyfocus ~= nil and page.joyfocus ~= false) ..
+        ' paneController=' .. tostring(pane.doController) ..
+        ' pad=' .. tostring(jd and jd.id) ..
+        ' routedFocus=' .. tostring(jd and jd.focus) ..
+        ' self=' .. tostring(page)
+end
 
 local function isItem(row)
     return instanceof(row, 'InventoryItem')
@@ -55,17 +78,30 @@ local function triggerValue(id)
     return nil
 end
 
-local function isReady(page)
+local function readyStatus(page)
     local pane = page and page.inventoryPane
-    if not pane or not pane.inventory or pane.mode ~= 'details' then return false end
-    if JoypadState and JoypadState.disableInvInteraction then return false end
+    if not pane then return false, 'missing-pane' end
+    if not pane.inventory then return false, 'missing-container' end
+    if pane.mode ~= 'details' then return false, 'wrong-mode' end
+    if JoypadState and JoypadState.disableInvInteraction then
+        return false, 'interaction-disabled'
+    end
     local player = getSpecificPlayer(page.player)
-    if not player or player:isAsleep() then return false end
-    if not (page.joyfocus or pane.doController) then return false end
-    -- Don't select while a menu or another UI element owns controller focus.
+    if not player then return false, 'missing-player' end
+    if player:isAsleep() then return false, 'asleep' end
+    if not (page.joyfocus or pane.doController) then
+        return false, 'no-controller-focus'
+    end
     local jd = JoypadState and JoypadState.players and JoypadState.players[page.player + 1]
-    if jd and jd.focus and jd.focus ~= page then return false end
-    return true
+    if jd and jd.focus and jd.focus ~= page then
+        return false, 'focus-routed-elsewhere'
+    end
+    return true, 'ready'
+end
+
+local function isReady(page)
+    local ready = readyStatus(page)
+    return ready
 end
 
 local lastRuntimeStatus = {}
@@ -78,7 +114,13 @@ local function runtimeNote(page, id, value)
 end
 
 local function pollPane(page)
-    if not isReady(page) then
+    local ready, reason = readyStatus(page)
+    -- Trace the branch that stops the entire selection before returning.
+    if page then
+        reportOnce('status:' .. tostring(page.onCharacter) .. ':' .. reason,
+            'inventory gate: ' .. reason .. ' ' .. focusDetails(page))
+    end
+    if not ready then
         local pane = page and page.inventoryPane
         local state = pane and pane.zrsState
         if state then
@@ -95,6 +137,10 @@ local function pollPane(page)
     local id = controllerId(page.player)
     local value = triggerValue(id)
     runtimeNote(page, id, value)
+    local axisState = value == nil and 'unavailable' or
+        (value > 0.25 and 'held' or 'released')
+    reportOnce('axis:' .. axisState, 'RT axis ' .. axisState ..
+        ' id=' .. tostring(id) .. ' value=' .. tostring(value))
     if value == nil then
         if not state.zrsNoAxisNoted then
             print('[ZomboidRangeSelect] RT axis unavailable. ' ..
@@ -136,16 +182,27 @@ end
 -- Called from both the pane's UI update and PZ's game tick. Either entry
 -- point is sufficient; the state machine is idempotent when both run.
 function ISInventoryPane:update()
+    reportOnce('pane-update', 'ISInventoryPane:update reached')
     oldPaneUpdate(self)
-    if self.inventoryPage then pollPane(self.inventoryPage) end
+    if self.inventoryPage then
+        pollPane(self.inventoryPage)
+    else
+        reportOnce('no-pane-parent', 'ISInventoryPane:update without inventoryPage')
+    end
 end
 
 local function pollActivePages()
+    reportOnce('tick', 'Events.OnTick executing')
     for playerNum = 0, 3 do
         if getSpecificPlayer(playerNum) then
+            reportOnce('player:' .. playerNum, 'game world player ' .. playerNum .. ' found')
             local inv = getPlayerInventory(playerNum)
             local loot = getPlayerLoot(playerNum)
-            if inv and inv.inventoryPane then pollPane(inv) end
+            if inv and inv.inventoryPane then
+                pollPane(inv)
+            elseif playerNum == 0 then
+                reportOnce('no-inventory-page', 'getPlayerInventory(0) has no inventoryPane')
+            end
             if loot and loot ~= inv and loot.inventoryPane then pollPane(loot) end
         end
     end
@@ -196,6 +253,8 @@ end
 
 -- Leave A/X/B vanilla unless the player actually has marked items.
 function ISInventoryPage:onJoypadDown(button)
+    reportOnce('page-button', 'ISInventoryPage:onJoypadDown reached: ' ..
+        tostring(button) .. ' ' .. focusDetails(self))
     if not isReady(self) then return oldDown(self, button) end
     pollPane(self)
     local state = stateFor(self.inventoryPane)
@@ -215,6 +274,7 @@ end
 -- The vanilla controller clears pane.selected every frame. Our selected items
 -- live in separate state, highlighted without modifying native inventory rows.
 function ISInventoryPane:prerender()
+    reportOnce('pane-prerender', 'ISInventoryPane:prerender reached')
     oldPrerender(self)
     if not self.inventoryPage or not isReady(self.inventoryPage) then return end
     local state = self.zrsState
@@ -235,4 +295,4 @@ function ISInventoryPane:prerender()
     self:setStencilRect(0, 0, self.width - 1, self.height - 1)
 end
 
-print('[ZomboidRangeSelect] v0.1.4 polling selection hooks installed')
+print('[ZomboidRangeSelect] v0.1.5 diagnostic polling hooks installed')
