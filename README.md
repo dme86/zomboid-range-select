@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.7 diagnostic prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.8 on-screen diagnostic prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -118,3 +118,11 @@ Interpretation:
 - If world events fire but no `DIAG ISInventoryPane:update reached` appears, focus on **UI hook lifecycle/overrides**, not RT mapping.
 
 Keep in mind the mock only tests that probe functions *would* fire when invoked; the actual PZ runtime is the source of truth.
+
+## No-log debugging: v0.1.8 HUD
+
+Prior tests demonstrated that the Mac game process keeps console.txt and DebugLog.txt open without necessarily appending later world events while the player is active. Absence of new log output does **not** prove that the controller or UI events are failing. The separate `ZZ_ZRS_RuntimeProbe.lua` now draws four small yellow status lines at the upper left in the main menu and in gameplay when the post-UI event is dispatched. It includes live player presence, controller bind ID, RT analog value, inventory cursor/row count/controller focus and which lifecycle events fired. It does not modify input and is only a temporary diagnostic.
+
+**Next test:** Fully restart PZ with this version, look for `ZRS DEBUG v0.1.8` in the main menu, load the save, open the inventory and hold RT while pressing D-pad up/down. Take a screenshot with the overlay visible. If the overlay appears only in the main menu, tell us; this distinguishes a UI event / Lua lifecycle problem from analog trigger reading. If it appears in-game, its fields identify the next fix. No terminal logs needed for this test.
+
+Note: the HUD drawing API is exercised in Lua mocks, but not yet in real PZ 42.21 on macOS; CI success alone does not verify in-game rendering.

@@ -20,12 +20,29 @@ assert(loadfile('Contents/mods/ZomboidRangeSelect/common/media/lua/client/ZRS_Co
 assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/shared/ZRS_SharedProbe.lua'))()
 assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/client/ZZ_ZRS_RuntimeProbe.lua'))()
 assert(#callbacks.OnFETick==1 and #callbacks.OnTick==1 and #callbacks.OnPlayerUpdate==1)
+assert(#callbacks.OnPostUIDraw==2)
+local rendered = {}
+UIFont = {Small='small'}
+getTextManager = function()
+    return {DrawString=function(_,font,x,y,text)
+        rendered[#rendered+1] = text
+    end}
+end
+JoypadAxis1d = {RightTrigger={getValue=function(_,id)
+    assert(id==2)
+    return 0.82
+end}}
 assert(type(ZRSRuntimeProbe.handlers.OnTick)=='function')
 callbacks.OnFETick[1]()
 phase='game'; MainScreen.instance.inGame=true
 callbacks.OnTick[1]()
 callbacks.OnPlayerUpdate[1]()
 callbacks.OnPostUIDraw[1]()
+callbacks.OnPostUIDraw[2]()
+assert(#rendered==4)
+assert(rendered[1]:find('ZRS DEBUG v0.1.8',1,true))
+assert(rendered[2]:find('Controller=2',1,true))
+assert(rendered[2]:find('RT=0.82',1,true))
 assert(ZRSRuntimeProbe.fired.OnFETick and ZRSRuntimeProbe.fired.OnTick)
 assert(ZRSRuntimeProbe.fired.OnPlayerUpdate and ZRSRuntimeProbe.fired.OnPostUIDraw)
 assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/server/ZRS_ServerProbe.lua'))()
