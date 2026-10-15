@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.8 on-screen diagnostic prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.9 controller navigation prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -126,3 +126,9 @@ Prior tests demonstrated that the Mac game process keeps console.txt and DebugLo
 **Next test:** Fully restart PZ with this version, look for `ZRS DEBUG v0.1.8` in the main menu, load the save, open the inventory and hold RT while pressing D-pad up/down. Take a screenshot with the overlay visible. If the overlay appears only in the main menu, tell us; this distinguishes a UI event / Lua lifecycle problem from analog trigger reading. If it appears in-game, its fields identify the next fix. No terminal logs needed for this test.
 
 Note: the HUD drawing API is exercised in Lua mocks, but not yet in real PZ 42.21 on macOS; CI success alone does not verify in-game rendering.
+
+## v0.1.9: D-pad focus navigation
+
+PZ B42 vanilla already changes focus left/right, but mouse-away auto-collapse can close the loot panel even as controller focus is transferred. This version changes the directional behavior in the inventory UI only: **D-pad right = loot**, **D-pad left = character inventory**, with no toggling if already on that side. Both panes are expanded and kept from auto-collapsing while either inventory page has joypad focus. Outside inventory controller focus, normal mouse auto-collapse still applies. A range started in one pane is committed when switching sides, and selections are tracked per pane. The yellow debug HUD was shortened to avoid dumping huge joypad object strings across the top of the screen.
+
+Test on your Mac: open inventory, press right to focus loot, then left to return. Wait several seconds with the pointer elsewhere to see whether either window auto-collapses. Test multiple selections on one pane. This behavior passes mocked UI tests but still requires validation against B42.21.

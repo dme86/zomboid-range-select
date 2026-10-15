@@ -57,7 +57,7 @@ end
 -- On-screen diagnostics deliberately bypass the console/debug log.
 -- TextManager:DrawString is used directly from PZ's post-UI render event.
 -- This probe never changes controller input or the inventory selection.
-probe.overlayVersion = '0.1.8'
+probe.overlayVersion = '0.1.9'
 probe.renderedFrames = 0
 
 local function safeCall(fn, fallback)
@@ -114,8 +114,9 @@ local function describePane(pane, page, jd)
     elseif not (page and page.joyfocus or pane.doController) then gate = 'no controller focus'
     elseif jd and jd.focus and jd.focus ~= page then gate = 'focus on other UI'
     end
-    return 'Inventory: rows=' .. rows .. ' cursor=' .. tostring(cursor) ..
-        ' focus=' .. tostring(page and page.joyfocus) ..
+    return 'Inv=' .. (page and page.onCharacter and 'personal' or 'loot') ..
+        ' rows=' .. rows .. ' row=' .. tostring(cursor) ..
+        ' focused=' .. tostring(page and (page.joyfocus ~= nil and page.joyfocus ~= false)) ..
         ' ctrl=' .. tostring(pane.doController) ..
         ' selected=' .. selected .. ' gate=' .. gate
 end
