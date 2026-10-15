@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-**v0.1.6 prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
+**v0.1.7 diagnostic prototype** for Project Zomboid Build 42 (tested in automated Lua mocks, not yet confirmed in the live game).
 
 The mod is a new, independent implementation. It does not contain the third-party Workshop mod's source code.
 
@@ -98,3 +98,23 @@ CI runs syntax and mock tests and creates a ZIP artifact. Live PZ 42.21 and macO
 ## License
 
 No license selected yet; GitHub hosting alone does not grant others permission to redistribute the code.
+
+## Independent runtime probe (v0.1.7)
+
+The earlier log showed that registering `OnTick` is **not proof** that the callback actually ran. This build does not guess at RT mapping. It installs an independent diagnostic in `common/media/lua/client`, `42/media/lua/shared`, `42/media/lua/client`, and `42/media/lua/server` to distinguish Lua loading contexts. The client probe registers `OnFETick`, `OnGameStart`, `OnCreatePlayer`, `OnTick`, `OnPlayerUpdate`, `OnPreUIDraw`, `OnPostUIDraw`; every event logs **once** on first invocation. The server probe similarly observes world/server load. These probes don't intercept controller buttons or change inventory selection.
+
+**One test:** Restart PZ after installing v0.1.7, enter your save, open inventory with controller, move D-pad, hold RT and move D-pad again. You may exit the game afterwards, but the log is readable without exiting.
+
+```fish
+grep -E 'ZRS-PROBE|ZomboidRangeSelect' ~/Zomboid/console.txt | tail -80
+```
+
+Interpretation:
+
+- `COMMON CLIENT FILE LOADED`, `SHARED FILE LOADED`, `CLIENT FILE LOADED` show **which script roots** PZ loaded, not proof of gameplay activity.
+- `CLIENT EVENT FIRED OnFETick` proves the frontend event dispatched; `CLIENT EVENT FIRED OnTick` / `OnPlayerUpdate` proves world callbacks in that client Lua environment.
+- `SERVER FILE LOADED` shows world/server file loading (this is dependent on single-player server setup and may not appear).
+- If `OnFETick` fires but no world event fires after loading a game, focus on the **frontend-to-world Lua lifecycle and mod activation**, not controller mapping.
+- If world events fire but no `DIAG ISInventoryPane:update reached` appears, focus on **UI hook lifecycle/overrides**, not RT mapping.
+
+Keep in mind the mock only tests that probe functions *would* fire when invoked; the actual PZ runtime is the source of truth.
