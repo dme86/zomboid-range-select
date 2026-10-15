@@ -232,6 +232,86 @@ function ISInventoryPane:prerender()
     self:setStencilRect(0, 0, self.width - 1, self.height - 1)
 end
 
+-- Controller input monitor for Mac/Steam Input troubleshooting.
+-- Runs outside inventory focus so we can tell a Steam Input keyboard/mouse
+-- mapping from native joypad signals. Emit only on input/assignment changes.
+local monitorTicks = 0
+local lastStatus = nil
+local lastButtons = {}
+local lastAxes = {}
+
+local function safeAxisValue(axis, id)
+    if not axis then return nil end
+    local ok, value = pcall(function() return axis:getValue(id) end)
+    return ok and value or nil
+end
+
+local function safeButtonDown(button, id)
+    if not button then return false end
+    local ok, down = pcall(function() return button:isDown(id) end)
+    return ok and down == true
+end
+
+local function playerAssignment()
+    local player = getSpecificPlayer(0)
+    if not player or not player.getJoypadBind then return 'not spawned' end
+    return tostring(player:getJoypadBind())
+end
+
+local function monitorJoypads()
+    monitorTicks = monitorTicks + 1
+    if monitorTicks % 5 ~= 0 then return end
+
+    local assigned = playerAssignment()
+    local jd = JoypadState and JoypadState.players and JoypadState.players[1]
+    local mapped = jd and jd.id or nil
+    local connectedIds = {}
+    local controllers = JoypadState and JoypadState.controllers or {}
+    for id = 0, 15 do
+        local ctl = controllers[id]
+        if ctl and ctl.connected then
+            connectedIds[#connectedIds + 1] = id
+        end
+    end
+    local status = 'player0=' .. assigned .. ' JoypadState=' .. tostring(mapped) ..
+        ' connected=[' .. table.concat(connectedIds, ',') .. ']'
+    if lastStatus ~= status then
+        lastStatus = status
+        print('[ZomboidRangeSelect] INPUT STATUS ' .. status)
+        if #connectedIds == 0 then
+            print('[ZomboidRangeSelect] No native gamepad detected by PZ. '
+                .. 'Check Steam Input layout (Gamepad, not keyboard/mouse), connection and PZ controller options.')
+        end
+    end
+
+    for _, id in ipairs(connectedIds) do
+        local rt = safeAxisValue(JoypadAxis1d and JoypadAxis1d.RightTrigger, id)
+        local held = rt ~= nil and rt > 0.25
+        local prevHeld = lastAxes[id]
+        if prevHeld == nil or prevHeld ~= held then
+            lastAxes[id] = held
+            print('[ZomboidRangeSelect] INPUT RT controller=' .. id ..
+                ' value=' .. tostring(rt) .. ' held=' .. tostring(held))
+        end
+        local up = safeButtonDown(JoypadButton and JoypadButton.DPadUp, id)
+        local down = safeButtonDown(JoypadButton and JoypadButton.DPadDown, id)
+        local state = (up and 'UP' or '') .. (down and 'DOWN' or '')
+        if lastButtons[id] ~= state then
+            lastButtons[id] = state
+            if state ~= '' then
+                print('[ZomboidRangeSelect] INPUT D-PAD controller=' .. id ..
+                    ' direction=' .. state .. ' RT=' .. tostring(rt))
+            end
+        end
+    end
+end
+
+if Events and Events.OnTick then
+    Events.OnTick.Add(monitorJoypads)
+else
+    print('[ZomboidRangeSelect] INPUT MONITOR unavailable: Events.OnTick missing')
+end
+
 -- Player 0 may initially be mouse-controlled even if a controller is available.
 -- Report the actual assignment after the save loads; never force a takeover.
 if Events and Events.OnGameStart then
@@ -249,4 +329,4 @@ if Events and Events.OnGameStart then
     end)
 end
 
-print('[ZomboidRangeSelect] Build 42 RT controller hooks installed (v0.1.2)')
+print('[ZomboidRangeSelect] Build 42 RT controller hooks installed (v0.1.3)')

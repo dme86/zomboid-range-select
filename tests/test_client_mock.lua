@@ -4,10 +4,13 @@ for _, name in ipairs({'ISUI/ISInventoryPage','ISUI/ISInventoryPane','ISUI/ISInv
     package.preload[name] = function() return true end
 end
 local aDown, menuCount, transfers, vanillaX = 0, 0, 0, 0
+local onTick
+Events = { OnTick = { Add = function(fn) onTick = fn end } }
 local rtValue = -1
 Joypad = {AButton=1,BButton=2,XButton=3,YButton=4}
 JoypadAxis1d = {RightTrigger={getValue=function() return rtValue end}}
-JoypadState = {players={},disableInvInteraction=false}
+JoypadState = {players={},controllers={[0]={connected=true}},disableInvInteraction=false}
+JoypadButton = {DPadUp={isDown=function() return false end},DPadDown={isDown=function() return false end}}
 UIManager = {getSpeedControls=function() return nil end}
 local player = {isAsleep=function() return false end, getJoypadBind=function() return -1 end}
 getSpecificPlayer = function() return player end
@@ -49,6 +52,8 @@ local page=setmetatable({joyfocus=false, inventoryPane=pane,player=0}, {__index=
 setmetatable(pane, {__index=ISInventoryPane})
 pane.inventoryPage=page
 assert(loadfile('Contents/mods/ZomboidRangeSelect/42/media/lua/client/ZRS_Client.lua'))()
+assert(type(onTick) == 'function')
+for i=1,10 do onTick() end  -- Status probe must also work without a player binding.
 -- A must keep vanilla behavior when no selection exists.
 page:onJoypadDown(Joypad.AButton)
 assert(aDown==1)

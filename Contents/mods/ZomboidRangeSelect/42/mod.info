@@ -1,5 +1,5 @@
 name=Zomboid Range Select
 id=ZomboidRangeSelect
 author=dme86
-modversion=0.1.2
+modversion=0.1.3
 description=Hold RT and use D-pad to select multiple inventory or loot items. Add multiple ranges and transfer them together. Build 42.

@@ -1,6 +1,6 @@
 # Zomboid Range Select
 
-Prototype v0.1.2 (Project Zomboid Build 42), developed independently from the workshop mod Controller Multi-Select. No upstream code is included.
+Prototype v0.1.3 (Project Zomboid Build 42), developed independently from the workshop mod Controller Multi-Select. No upstream code is included.
 
 ## Gamepad
 
@@ -38,12 +38,18 @@ The tests exercise **only the portable selection state**, not PZ's runtime/contr
 
 If the mod loads but RT+D-pad does nothing, first make sure PZ is actually controlling your **character** with the gamepad (not only moving a Steam Input mouse pointer). In the in-game controller options verify the device, use the game's controller takeover/assignment, and navigate the inventory using the controller's D-pad.
 
+With an 8BitDo Ultimate 2 on macOS, prefer its Bluetooth/D-Input gamepad mode and a Steam Input **Gamepad** layout (not keyboard/mouse). Check both Steam > Settings > Controller and PZ > Options > Controllers; make sure D-pad navigates the inventory rows, not just a mouse pointer.
+
 On macOS, after a test run:
 
 ```sh
 grep -F '[ZomboidRangeSelect]' "$HOME/Zomboid/console.txt" | tail -30
 ```
 
+- `INPUT STATUS player0=-1` (or `not spawned` before the game loads): the player is not yet assigned to a native gamepad.
+- `INPUT STATUS ... connected=[]`: PZ sees no native gamepad (Steam Input may instead be emulating keyboard/mouse).
+- `INPUT RT controller=N ... held=true`: PZ sees a right-trigger pull.
+- `INPUT D-PAD controller=N direction=...`: PZ sees raw D-pad presses even if inventory focus is missing.
 - `no controller assigned at game start`: your character was mouse-controlled when the game began; switch to controller mode before testing. You may still assign it later in the session.
 - `D-pad ... RT=...`: inventory page is receiving D-pad events and reports the right-trigger axis value.
 - `RT selection started`: our range-selection hook ran.
