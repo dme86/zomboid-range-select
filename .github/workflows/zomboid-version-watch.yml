@@ -29,7 +29,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_version_watch.py'
       - name: Read Steam build IDs (game client, not dedicated server)
         run: |
-          docker run --rm --pull=always cm2network/steamcmd:latest \
+          docker run --rm --pull=always steamcmd/steamcmd:latest \
             +login anonymous +app_info_update 1 +app_info_print 108600 +quit \
             > steam-app-info.txt 2>&1
           python scripts/pz_version_watch.py steam-app-info.txt --output builds.json
