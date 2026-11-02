@@ -1,0 +1,56 @@
+name: Project Zomboid version watch
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: zomboid-version-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: '5.3'
+      - name: Test version parser
+        run: python -m unittest discover -s tests -p 'test_version_watch.py'
+      - name: Read Steam build IDs (game client, not dedicated server)
+        run: |
+          docker run --rm --pull=always steamcmd/steamcmd:latest \
+            +login anonymous +app_info_update 1 +app_info_print 108600 +quit \
+            > steam-app-info.txt 2>&1
+          python scripts/pz_version_watch.py steam-app-info.txt --output builds.json
+      - name: Check mod with existing tests
+        run: |
+          find Contents -type f -name '*.lua' -print0 | xargs -0 -n1 luac -p
+          lua tests/test_core.lua
+          lua tests/test_client_mock.lua
+      - name: Report newly observed builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/pz_version_watch.py --notify builds.json
+      - name: Upload Steam metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: steam-app-info
+          path: |
+            builds.json
+            steam-app-info.txt
+          if-no-files-found: ignore
+          retention-days: 14

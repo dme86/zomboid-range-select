@@ -52,3 +52,20 @@ find Contents -type f -name '*.lua' -exec luac -p {} \;
 lua tests/test_core.lua
 lua tests/test_client_mock.lua
 ```
+
+## Automatic game-version monitoring
+
+The separate [Project Zomboid version watch](.github/workflows/zomboid-version-watch.yml)
+workflow runs daily at 07:17 UTC or manually via GitHub Actions. It reads
+**client** app 108600 Steam build IDs (public/unstable), runs the existing
+Lua syntax and mocked-controller tests, and opens one GitHub issue for each
+previously unseen branch/build ID. Closed issues are also considered to avoid
+repeat alerts. The initial run will create review issues for current builds.
+
+**Important:** a passing workflow does *not* prove compatibility with the new
+game release: Steam metadata supplies build IDs, not the changed client Lua
+APIs. Each issue includes an explicit manual in-game validation checklist.
+The workflow fails rather than silently reporting success if Steam metadata
+cannot be parsed. No Steam account credentials or game downloads are needed.
+
+Issues require GitHub Actions to have permission to create repository issues.
